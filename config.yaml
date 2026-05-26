@@ -1,0 +1,21 @@
+data_root: /d/hpc/home/ak1790/.cache/kagglehub/competitions/birdclef-2026
+perch_model_path: models/perch_v2
+perch_cpu_model_path: models/perch_v2_cpu
+
+seed: 42
+
+soundscape_val_fraction: 0.2
+focal_train_weight: 1.0
+soundscape_train_weight: 1.0
+
+head_type: mlp
+hidden_dim: 512
+dropout: 0.3
+
+batch_size: 16
+epochs_head: 5
+epochs_finetune: 5
+head_lr: 0.001
+finetune_head_lr: 0.0001
+backbone_lr: 0.00001
+loss: bce
