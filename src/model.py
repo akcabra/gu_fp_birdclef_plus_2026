@@ -5,11 +5,11 @@ import tensorflow as tf
 from .perch import PerchEmbeddingLayer
 
 
-def build_model(cfg: dict, trainable_backbone: bool = False) -> tf.keras.Model:
+def build_model(cfg: dict) -> tf.keras.Model:
     inputs = tf.keras.Input(shape=(160000,), dtype=tf.float32, name="waveform")
     embeddings = PerchEmbeddingLayer(
         cfg["perch_model_path"],
-        trainable=trainable_backbone,
+        trainable=False,
         name="perch",
     )(inputs)
 
@@ -22,8 +22,3 @@ def build_model(cfg: dict, trainable_backbone: bool = False) -> tf.keras.Model:
         raise ValueError(f"Unknown head_type: {head_type}")
     logits = tf.keras.layers.Dense(234, name="birdclef_logits")(x)
     return tf.keras.Model(inputs=inputs, outputs=logits, name="perch_birdclef")
-
-
-def set_backbone_trainable(model: tf.keras.Model, trainable: bool) -> None:
-    perch = model.get_layer("perch")
-    perch.trainable = trainable

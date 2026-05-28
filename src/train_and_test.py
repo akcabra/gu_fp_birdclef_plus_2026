@@ -11,7 +11,7 @@ from src.config import load_config
 from src.data import attach_targets, build_label_space, load_tables, make_mixed_split, positive_class_weights, save_split
 from src.metrics import challenge_score_from_arrays, sigmoid
 from src.model import build_model
-from src.train import format_duration, predict_dataset, train_finetune, train_head_only
+from src.train import format_duration, predict_dataset, train_head_only
 from src.utils import set_seed
 
 
@@ -50,23 +50,17 @@ def best_epoch_from_history(history, phase: str) -> tuple[str, float] | None:
     return f"{phase} epoch {best_index + 1}", scores[best_index]
 
 
-def best_epoch_from_histories(head_history, finetune_history) -> tuple[str, float]:
-    candidates = [
-        best_epoch_from_history(head_history, "head"),
-        best_epoch_from_history(finetune_history, "finetune"),
-    ]
-    candidates = [candidate for candidate in candidates if candidate is not None]
-    return max(candidates, key=lambda candidate: candidate[1])
+def best_epoch_from_histories(head_history) -> tuple[str, float]:
+    return best_epoch_from_history(head_history, "head")
 
 
 def print_experiment_summary(
     cfg: dict,
     head_history,
-    finetune_history,
     final_score: float,
     training_seconds: float,
 ) -> None:
-    best_epoch, best_score = best_epoch_from_histories(head_history, finetune_history)
+    best_epoch, best_score = best_epoch_from_histories(head_history)
     print()
     print("Experiment summary")
     print(f"experiment name: {cfg['experiment_name']}")
@@ -109,14 +103,13 @@ def main():
     val_ds = make_tf_dataset(val_rows, batch_size=cfg["batch_size"], training=False)
     pos_weights = make_loss_weights(cfg, train_rows)
 
-    model = build_model(cfg, trainable_backbone=False)
+    model = build_model(cfg)
     print("Model")
     model.summary(print_fn=print)
     print()
 
     train_start = perf_counter()
     head_history = train_head_only(model, train_ds, val_ds, label_space.labels, cfg, pos_weights)
-    finetune_history = train_finetune(model, train_ds, val_ds, label_space.labels, cfg, pos_weights)
     training_seconds = perf_counter() - train_start
     print(f"Total training time: {format_duration(training_seconds)}")
 
@@ -125,7 +118,7 @@ def main():
     score = challenge_score_from_arrays(y_true, sigmoid(logits), label_space.labels)
     print(f"Evaluation time: {format_duration(perf_counter() - eval_start)}")
     print(f"validation challenge score: {score:.5f}")
-    print_experiment_summary(cfg, head_history, finetune_history, score, training_seconds)
+    print_experiment_summary(cfg, head_history, score, training_seconds)
     print(f"Total run time: {format_duration(perf_counter() - run_start)}")
 
 

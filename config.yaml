@@ -3,7 +3,7 @@ perch_model_path: models/perch_v2
 perch_cpu_model_path: models/perch_v2_cpu
 
 seed: 42
-experiment_name: linear_head_frozen_perch
+experiment_name: mlp_head_frozen_perch_bce_lr_00003
 sampling: standard
 augmentation: random_crop
 notes: ""
@@ -12,15 +12,12 @@ soundscape_val_fraction: 0.2
 focal_train_weight: 1.0
 soundscape_train_weight: 1.0
 
-head_type: linear
+head_type: mlp
 hidden_dim: 512
 dropout: 0.3
 
 batch_size: 4
-epochs_head: 4
-epochs_finetune: 0
-head_lr: 0.0001
-finetune_head_lr: 0.0001
-backbone_lr: 0.000001
+epochs_head: 6
+head_lr: 0.0003
 loss: bce
-weighted_bce_max_pos_weight: 5.0
+weighted_bce_max_pos_weight: 2.0

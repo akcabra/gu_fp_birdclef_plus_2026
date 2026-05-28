@@ -7,7 +7,6 @@ import numpy as np
 import tensorflow as tf
 
 from .metrics import challenge_score_from_arrays, sigmoid
-from .model import set_backbone_trainable
 
 
 def format_duration(seconds: float) -> str:
@@ -76,7 +75,6 @@ def compile_model(model: tf.keras.Model, learning_rate: float, cfg: dict, pos_we
 def train_head_only(model, train_ds, val_ds, labels, cfg, pos_weights=None):
     print("Starting head-only training")
     start = perf_counter()
-    set_backbone_trainable(model, False)
     compile_model(model, cfg["head_lr"], cfg, pos_weights)
     checkpoint_dir = Path("outputs") / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -99,35 +97,6 @@ def train_head_only(model, train_ds, val_ds, labels, cfg, pos_weights=None):
         verbose=2,
     )
     print(f"Finished head-only training in {format_duration(perf_counter() - start)}")
-    return history
-
-
-def train_finetune(model, train_ds, val_ds, labels, cfg, pos_weights=None):
-    print("Starting Perch fine-tuning")
-    start = perf_counter()
-    set_backbone_trainable(model, True)
-    compile_model(model, cfg["backbone_lr"], cfg, pos_weights)
-    checkpoint_dir = Path("outputs") / "checkpoints"
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    callbacks = [
-        EpochTimingCallback(),
-        ChallengeScoreCallback(val_ds, labels),
-        tf.keras.callbacks.ModelCheckpoint(
-            checkpoint_dir / "best_finetuned.weights.h5",
-            monitor="val_challenge_score",
-            mode="max",
-            save_best_only=True,
-            save_weights_only=True,
-        ),
-    ]
-    history = model.fit(
-        train_ds,
-        validation_data=val_ds,
-        epochs=cfg["epochs_finetune"],
-        callbacks=callbacks,
-        verbose=2,
-    )
-    print(f"Finished Perch fine-tuning in {format_duration(perf_counter() - start)}")
     return history
 
 
