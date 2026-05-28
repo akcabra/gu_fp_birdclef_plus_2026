@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import tensorflow as tf
-import tensorflow_hub as hub
 
 
 @tf.keras.utils.register_keras_serializable(package="birdclef")
@@ -16,14 +15,15 @@ class PerchEmbeddingLayer(tf.keras.layers.Layer):
     ):
         super().__init__(trainable=trainable, **kwargs)
         self.model_path = str(model_path)
-        self.hub_layer = hub.KerasLayer(
+        self.saved_model_layer = tf.keras.layers.TFSMLayer(
             str(model_path),
-            output_key="embedding",
+            call_endpoint="serving_default",
             trainable=trainable,
         )
 
     def call(self, inputs, training=False):
-        return self.hub_layer(inputs, training=training)
+        outputs = self.saved_model_layer(inputs, training=training)
+        return outputs["embedding"]
 
     def get_config(self):
         config = super().get_config()
