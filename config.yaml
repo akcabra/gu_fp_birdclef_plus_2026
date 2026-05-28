@@ -3,7 +3,7 @@ perch_model_path: models/perch_v2
 perch_cpu_model_path: models/perch_v2_cpu
 
 seed: 42
-experiment_name: perch_mlp_base_saved_embeddings_25_epochs
+experiment_name: perch_mlp_saved_embeddings_25_epochs_drop_030_focal_g015_a025
 sampling: standard
 augmentation: random_crop
 notes: ""
@@ -22,11 +22,11 @@ embedding_cache_focal_crops_per_recording: 3
 train_embedding_cache_path: outputs/embedding_cache/train_embeddings.npz
 val_embedding_cache_path: outputs/embedding_cache/val_embeddings.npz
 
-train_enabled: false
-load_model_weights_path: "outputs/checkpoints/best_25.weights.h5"
-save_model_weights_path: outputs/checkpoints/latest_25.weights.h5
-save_best_model: true
-best_model_weights_path: outputs/checkpoints/best_25.weights.h5
+train_enabled: true
+load_model_weights_path: ""
+save_model_weights_path: "outputs/checkpoints/wbce_latest_25_drop_030_focal.weights.h5"
+save_best_model: false
+best_model_weights_path: ""
 restore_best_model: true
 
 soundscape_val_fraction: 0.2
@@ -40,5 +40,7 @@ dropout: 0.3
 batch_size: 16
 epochs_head: 25
 head_lr: 0.0003
-loss: bce
+loss: bce # bce, weighted_bce, or focal
 weighted_bce_max_pos_weight: 2.0
+focal_gamma: 1.5
+focal_alpha: 0.25 # set to null to disable alpha balancing

@@ -30,6 +30,26 @@ def weighted_binary_crossentropy(pos_weights: np.ndarray):
     return loss
 
 
+def binary_focal_crossentropy(gamma: float = 2.0, alpha: float | None = None):
+    def loss(y_true, logits):
+        y_true_float = tf.cast(y_true, tf.float32)
+        logits_float = tf.cast(logits, tf.float32)
+        probs = tf.nn.sigmoid(logits_float)
+        cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(
+            labels=y_true_float,
+            logits=logits_float,
+        )
+        p_t = y_true_float * probs + (1.0 - y_true_float) * (1.0 - probs)
+        modulating_factor = tf.pow(1.0 - p_t, gamma)
+        per_class_loss = modulating_factor * cross_entropy
+        if alpha is not None:
+            alpha_t = y_true_float * alpha + (1.0 - y_true_float) * (1.0 - alpha)
+            per_class_loss = alpha_t * per_class_loss
+        return tf.reduce_mean(per_class_loss)
+
+    return loss
+
+
 class EpochTimingCallback(tf.keras.callbacks.Callback):
     def on_epoch_begin(self, epoch, logs=None):
         self.epoch_start = perf_counter()
@@ -88,6 +108,11 @@ def compile_model(model: tf.keras.Model, learning_rate: float, cfg: dict, pos_we
         if pos_weights is None:
             raise ValueError("weighted_bce requires positive class weights")
         loss = weighted_binary_crossentropy(pos_weights)
+    elif loss_name == "focal":
+        loss = binary_focal_crossentropy(
+            gamma=cfg["focal_gamma"],
+            alpha=cfg["focal_alpha"],
+        )
     else:
         raise ValueError(f"Unknown loss: {loss_name}")
 

@@ -162,6 +162,8 @@ def print_experiment_summary(
     print(f"head_lr: {cfg['head_lr']}")
     print(f"dropout: {cfg['dropout']}")
     print(f"weighted_bce_max_pos_weight: {cfg['weighted_bce_max_pos_weight']}")
+    print(f"focal_gamma: {cfg['focal_gamma']}")
+    print(f"focal_alpha: {cfg['focal_alpha']}")
     print(f"validation_num_crops: {cfg['validation_num_crops']}")
     print(f"validation_crop_stride_seconds: {cfg['validation_crop_stride_seconds']}")
     print(f"validation_crop_aggregation: {cfg['validation_crop_aggregation']}")
