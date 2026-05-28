@@ -18,7 +18,7 @@ def build_model(cfg: dict, trainable_backbone: bool = False) -> tf.keras.Model:
     if head_type == "mlp":
         x = tf.keras.layers.Dense(cfg["hidden_dim"], activation="gelu", name="head_dense")(x)
         x = tf.keras.layers.Dropout(cfg["dropout"], name="head_dropout_2")(x)
-    elif head_type == "linear":
+    elif head_type != "linear":
         raise ValueError(f"Unknown head_type: {head_type}")
     logits = tf.keras.layers.Dense(234, name="birdclef_logits")(x)
     return tf.keras.Model(inputs=inputs, outputs=logits, name="perch_birdclef")
