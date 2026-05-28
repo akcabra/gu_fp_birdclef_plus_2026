@@ -3,10 +3,14 @@ perch_model_path: models/perch_v2
 perch_cpu_model_path: models/perch_v2_cpu
 
 seed: 42
-experiment_name: mlp_head_frozen_perch_bce_lr_00003
+experiment_name: multi_crop_validation_n5_max
 sampling: standard
 augmentation: random_crop
 notes: ""
+validation_num_crops: 5
+validation_crop_stride_seconds: 1.0
+validation_crop_aggregation: max # max or top_k_mean
+validation_top_k: 2
 
 soundscape_val_fraction: 0.2
 focal_train_weight: 1.0
@@ -16,8 +20,8 @@ head_type: mlp
 hidden_dim: 512
 dropout: 0.3
 
-batch_size: 4
-epochs_head: 6
+batch_size: 16
+epochs_head: 10
 head_lr: 0.0003
 loss: bce
 weighted_bce_max_pos_weight: 2.0

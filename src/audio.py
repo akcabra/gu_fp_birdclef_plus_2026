@@ -17,6 +17,7 @@ def crop_or_pad(
         start = np.random.randint(0, len(audio) - 160000 + 1)
     else:
         start = max(0, (len(audio) - 160000) // 2)
+    start = min(max(0, start), max(0, len(audio) - 160000))
 
     clip = audio[start : start + 160000]
     if len(clip) < 160000:
@@ -64,3 +65,46 @@ def make_tf_dataset(rows, batch_size: int, training: bool):
     ds = ds.map(_load, num_parallel_calls=tf.data.AUTOTUNE)
     ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
     return ds
+
+
+def make_multicrop_tf_dataset(rows, batch_size: int, offsets_seconds: list[float]):
+    paths = []
+    sources = []
+    starts = []
+    targets = []
+    row_indices = []
+
+    for row_idx, row in enumerate(rows.itertuples(index=False)):
+        for offset in offsets_seconds:
+            paths.append(str(row.audio_path))
+            sources.append(str(row.source))
+            starts.append(float(row.start_seconds) + offset)
+            targets.append(row.target)
+            row_indices.append(row_idx)
+
+    paths = np.asarray(paths, dtype=object)
+    sources = np.asarray(sources, dtype=object)
+    starts = np.asarray(starts, dtype=np.float32)
+    targets = np.stack(targets).astype(np.float32)
+    row_indices = np.asarray(row_indices, dtype=np.int32)
+
+    ds = tf.data.Dataset.from_tensor_slices((paths, sources, starts, targets))
+
+    def _load(path, source, start, target):
+        waveform = tf.numpy_function(
+            func=lambda p, s, st: load_clip_np(
+                p.decode("utf-8"),
+                s.decode("utf-8"),
+                float(st),
+                False,
+            ),
+            inp=[path, source, start],
+            Tout=tf.float32,
+        )
+        waveform.set_shape([160000])
+        target.set_shape([targets.shape[1]])
+        return waveform, target
+
+    ds = ds.map(_load, num_parallel_calls=tf.data.AUTOTUNE)
+    ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    return ds, row_indices

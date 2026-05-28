@@ -6,12 +6,12 @@ import sys
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.audio import make_tf_dataset
+from src.audio import make_multicrop_tf_dataset, make_tf_dataset
 from src.config import load_config
 from src.data import attach_targets, build_label_space, load_tables, make_mixed_split, positive_class_weights, save_split
 from src.metrics import challenge_score_from_arrays, sigmoid
 from src.model import build_model
-from src.train import format_duration, predict_dataset, train_head_only
+from src.train import format_duration, predict_dataset, predict_multicrop_dataset, train_head_only
 from src.utils import set_seed
 
 
@@ -38,6 +38,13 @@ def make_loss_weights(cfg: dict, train_rows):
     print(f"positive weight max: {weights.max():.3f}")
     print()
     return weights
+
+
+def validation_crop_offsets(cfg: dict) -> list[float]:
+    num_crops = cfg["validation_num_crops"]
+    stride = cfg["validation_crop_stride_seconds"]
+    center = (num_crops - 1) / 2
+    return [(i - center) * stride for i in range(num_crops)]
 
 
 def best_epoch_from_history(history, phase: str) -> tuple[str, float] | None:
@@ -71,6 +78,10 @@ def print_experiment_summary(
     print(f"head_lr: {cfg['head_lr']}")
     print(f"dropout: {cfg['dropout']}")
     print(f"weighted_bce_max_pos_weight: {cfg['weighted_bce_max_pos_weight']}")
+    print(f"validation_num_crops: {cfg['validation_num_crops']}")
+    print(f"validation_crop_stride_seconds: {cfg['validation_crop_stride_seconds']}")
+    print(f"validation_crop_aggregation: {cfg['validation_crop_aggregation']}")
+    print(f"validation_top_k: {cfg['validation_top_k']}")
     print(f"best epoch: {best_epoch}")
     print(f"best val_challenge_score: {best_score:.5f}")
     print(f"final val_challenge_score: {final_score:.5f}")
@@ -100,7 +111,15 @@ def main():
     save_split(train_rows, val_rows, PROJECT_ROOT / "data" / "splits")
 
     train_ds = make_tf_dataset(train_rows, batch_size=cfg["batch_size"], training=True)
-    val_ds = make_tf_dataset(val_rows, batch_size=cfg["batch_size"], training=False)
+    offsets = validation_crop_offsets(cfg)
+    if cfg["validation_num_crops"] == 1:
+        val_ds = make_tf_dataset(val_rows, batch_size=cfg["batch_size"], training=False)
+        val_row_indices = None
+    else:
+        val_ds, val_row_indices = make_multicrop_tf_dataset(val_rows, cfg["batch_size"], offsets)
+        print("Validation crops")
+        print(f"offsets_seconds: {offsets}")
+        print()
     pos_weights = make_loss_weights(cfg, train_rows)
 
     model = build_model(cfg)
@@ -109,13 +128,33 @@ def main():
     print()
 
     train_start = perf_counter()
-    head_history = train_head_only(model, train_ds, val_ds, label_space.labels, cfg, pos_weights)
+    head_history = train_head_only(
+        model,
+        train_ds,
+        val_ds,
+        label_space.labels,
+        cfg,
+        pos_weights,
+        val_row_indices=val_row_indices,
+        num_val_rows=len(val_rows),
+    )
     training_seconds = perf_counter() - train_start
     print(f"Total training time: {format_duration(training_seconds)}")
 
     eval_start = perf_counter()
-    y_true, logits = predict_dataset(model, val_ds)
-    score = challenge_score_from_arrays(y_true, sigmoid(logits), label_space.labels)
+    if val_row_indices is None:
+        y_true, logits = predict_dataset(model, val_ds)
+        scores = sigmoid(logits)
+    else:
+        y_true, scores = predict_multicrop_dataset(
+            model,
+            val_ds,
+            val_row_indices,
+            len(val_rows),
+            cfg["validation_crop_aggregation"],
+            cfg["validation_top_k"],
+        )
+    score = challenge_score_from_arrays(y_true, scores, label_space.labels)
     print(f"Evaluation time: {format_duration(perf_counter() - eval_start)}")
     print(f"validation challenge score: {score:.5f}")
     print_experiment_summary(cfg, head_history, score, training_seconds)
