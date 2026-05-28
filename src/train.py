@@ -161,12 +161,15 @@ def predict_dataset(model: tf.keras.Model, ds) -> tuple[np.ndarray, np.ndarray]:
 def predict_dataset_scores(model: tf.keras.Model, ds, perch_blender=None) -> tuple[np.ndarray, np.ndarray]:
     targets = []
     scores = []
-    perch_layer = model.get_layer("perch") if perch_blender is not None else None
+    is_cached_input = len(model.inputs) == 2 and model.inputs[0].name.startswith("perch_embedding")
+    perch_layer = None if is_cached_input or perch_blender is None else model.get_layer("perch")
     for x_batch, y_batch in ds:
         targets.append(y_batch.numpy())
         logits = model.predict(x_batch, verbose=0)
         head_scores = sigmoid(logits)
-        if perch_blender is not None:
+        if perch_blender is not None and is_cached_input:
+            head_scores = perch_blender.blend_mapped(head_scores, x_batch[1].numpy())
+        elif perch_blender is not None:
             perch_outputs = perch_layer.saved_model_layer(x_batch, training=False)
             head_scores = perch_blender.blend(head_scores, perch_outputs["label"].numpy())
         scores.append(head_scores)

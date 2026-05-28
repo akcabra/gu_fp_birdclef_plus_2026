@@ -3,14 +3,17 @@ from pprint import pformat
 from time import perf_counter
 import sys
 
+import pandas as pd
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.audio import make_multicrop_tf_dataset, make_tf_dataset
 from src.config import load_config
 from src.data import attach_targets, build_label_space, load_tables, make_mixed_split, positive_class_weights, save_split
+from src.embedding_cache import load_embedding_cache, make_embedding_dataset, write_embedding_cache
 from src.metrics import challenge_score_from_arrays
-from src.model import build_model
+from src.model import build_embedding_model, build_model
 from src.perch_blend import PerchScoreBlender
 from src.train import format_duration, predict_dataset_scores, predict_multicrop_dataset, train_head_only
 from src.utils import set_seed
@@ -57,11 +60,75 @@ def make_perch_blender(cfg: dict, labels: list[str]) -> PerchScoreBlender | None
     return blender
 
 
+def make_perch_mapper(cfg: dict, labels: list[str]) -> PerchScoreBlender:
+    return PerchScoreBlender(labels, cfg["perch_label_mapping_path"], cfg["perch_blend_alpha"])
+
+
 def validation_crop_offsets(cfg: dict) -> list[float]:
     num_crops = cfg["validation_num_crops"]
     stride = cfg["validation_crop_stride_seconds"]
     center = (num_crops - 1) / 2
     return [(i - center) * stride for i in range(num_crops)]
+
+
+def expand_focal_rows(rows, crops_per_focal: int):
+    focal_rows = rows[rows["source"] == "focal"]
+    other_rows = rows[rows["source"] != "focal"]
+    parts = [focal_rows] * crops_per_focal + [other_rows]
+    return pd.concat(parts, ignore_index=True)
+
+
+def make_datasets(cfg: dict, train_rows, val_rows, labels: list[str]):
+    offsets = validation_crop_offsets(cfg)
+    if not cfg["embedding_cache_enabled"]:
+        train_ds = make_tf_dataset(train_rows, batch_size=cfg["batch_size"], training=True)
+        if cfg["validation_num_crops"] == 1:
+            val_ds = make_tf_dataset(val_rows, batch_size=cfg["batch_size"], training=False)
+            val_row_indices = None
+        else:
+            val_ds, val_row_indices = make_multicrop_tf_dataset(val_rows, cfg["batch_size"], offsets)
+            print("Validation crops")
+            print(f"offsets_seconds: {offsets}")
+            print()
+        return train_ds, val_ds, val_row_indices, train_rows
+
+    cache_train_rows = expand_focal_rows(train_rows, cfg["embedding_cache_focal_crops_per_recording"])
+    train_cache_path = Path(cfg["train_embedding_cache_path"])
+    val_cache_path = Path(cfg["val_embedding_cache_path"])
+
+    if cfg["write_embedding_cache"] or not train_cache_path.exists() or not val_cache_path.exists():
+        raw_model = build_model(cfg)
+        perch_mapper = make_perch_mapper(cfg, labels)
+
+        train_raw_ds = make_tf_dataset(cache_train_rows, batch_size=cfg["batch_size"], training=True)
+        print(f"Writing train embedding cache to {train_cache_path}")
+        write_embedding_cache(raw_model, train_raw_ds, train_cache_path, perch_mapper)
+
+        if cfg["validation_num_crops"] == 1:
+            val_raw_ds = make_tf_dataset(val_rows, batch_size=cfg["batch_size"], training=False)
+            val_row_indices = None
+        else:
+            val_raw_ds, val_row_indices = make_multicrop_tf_dataset(val_rows, cfg["batch_size"], offsets)
+            print("Validation crops")
+            print(f"offsets_seconds: {offsets}")
+            print()
+        print(f"Writing validation embedding cache to {val_cache_path}")
+        write_embedding_cache(raw_model, val_raw_ds, val_cache_path, perch_mapper, val_row_indices)
+        del raw_model
+
+    train_cache = load_embedding_cache(train_cache_path)
+    val_cache = load_embedding_cache(val_cache_path)
+    train_ds = make_embedding_dataset(train_cache, cfg["batch_size"], training=True)
+    val_ds = make_embedding_dataset(val_cache, cfg["batch_size"], training=False)
+    val_row_indices = val_cache["row_indices"] if "row_indices" in val_cache else None
+
+    print("Embedding cache")
+    print(f"train cache: {train_cache_path}")
+    print(f"validation cache: {val_cache_path}")
+    print(f"training examples: {len(train_cache['targets'])}")
+    print(f"validation examples: {len(val_cache['targets'])}")
+    print()
+    return train_ds, val_ds, val_row_indices, cache_train_rows
 
 
 def best_epoch_from_history(history, phase: str) -> tuple[str, float] | None:
@@ -101,6 +168,11 @@ def print_experiment_summary(
     print(f"validation_top_k: {cfg['validation_top_k']}")
     print(f"perch_blend_enabled: {cfg['perch_blend_enabled']}")
     print(f"perch_blend_alpha: {cfg['perch_blend_alpha']}")
+    print(f"embedding_cache_enabled: {cfg['embedding_cache_enabled']}")
+    print(f"write_embedding_cache: {cfg['write_embedding_cache']}")
+    print(f"embedding_cache_focal_crops_per_recording: {cfg['embedding_cache_focal_crops_per_recording']}")
+    print(f"train_embedding_cache_path: {cfg['train_embedding_cache_path']}")
+    print(f"val_embedding_cache_path: {cfg['val_embedding_cache_path']}")
     print(f"train_enabled: {cfg['train_enabled']}")
     print(f"load_model_weights_path: {cfg['load_model_weights_path']}")
     print(f"save_model_weights_path: {cfg['save_model_weights_path']}")
@@ -140,20 +212,11 @@ def main():
     print_data_summary(train_rows, val_rows)
     save_split(train_rows, val_rows, PROJECT_ROOT / "data" / "splits")
 
-    train_ds = make_tf_dataset(train_rows, batch_size=cfg["batch_size"], training=True)
-    offsets = validation_crop_offsets(cfg)
-    if cfg["validation_num_crops"] == 1:
-        val_ds = make_tf_dataset(val_rows, batch_size=cfg["batch_size"], training=False)
-        val_row_indices = None
-    else:
-        val_ds, val_row_indices = make_multicrop_tf_dataset(val_rows, cfg["batch_size"], offsets)
-        print("Validation crops")
-        print(f"offsets_seconds: {offsets}")
-        print()
-    pos_weights = make_loss_weights(cfg, train_rows)
+    train_ds, val_ds, val_row_indices, loss_weight_rows = make_datasets(cfg, train_rows, val_rows, label_space.labels)
+    pos_weights = make_loss_weights(cfg, loss_weight_rows)
     perch_blender = make_perch_blender(cfg, label_space.labels)
 
-    model = build_model(cfg)
+    model = build_embedding_model(cfg) if cfg["embedding_cache_enabled"] else build_model(cfg)
     print("Model")
     model.summary(print_fn=print)
     print()

@@ -26,14 +26,22 @@ class PerchScoreBlender:
     def matched_count(self) -> int:
         return len(self.birdclef_indices)
 
-    def blend(self, head_scores: np.ndarray, perch_label_output: np.ndarray) -> np.ndarray:
+    def map_scores(self, perch_label_output: np.ndarray) -> np.ndarray:
         perch_scores = perch_label_output
         if perch_scores.min() < 0.0 or perch_scores.max() > 1.0:
             perch_scores = sigmoid(perch_scores)
 
+        mapped = np.zeros((len(perch_scores), len(self.labels)), dtype=np.float32)
+        mapped[:, self.birdclef_indices] = perch_scores[:, self.perch_indices]
+        return mapped
+
+    def blend_mapped(self, head_scores: np.ndarray, mapped_perch_scores: np.ndarray) -> np.ndarray:
         blended = head_scores.copy()
         blended[:, self.birdclef_indices] = (
             self.alpha * head_scores[:, self.birdclef_indices]
-            + (1.0 - self.alpha) * perch_scores[:, self.perch_indices]
+            + (1.0 - self.alpha) * mapped_perch_scores[:, self.birdclef_indices]
         )
         return blended
+
+    def blend(self, head_scores: np.ndarray, perch_label_output: np.ndarray) -> np.ndarray:
+        return self.blend_mapped(head_scores, self.map_scores(perch_label_output))

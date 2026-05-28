@@ -16,6 +16,12 @@ perch_blend_enabled: false
 perch_blend_alpha: 0.8
 perch_label_mapping_path: data/metadata/birdclef_to_perch_label_mapping.csv
 
+embedding_cache_enabled: false
+write_embedding_cache: false
+embedding_cache_focal_crops_per_recording: 3
+train_embedding_cache_path: outputs/embedding_cache/train_embeddings.npz
+val_embedding_cache_path: outputs/embedding_cache/val_embeddings.npz
+
 train_enabled: true
 load_model_weights_path: ""
 save_model_weights_path: outputs/checkpoints/latest.weights.h5
