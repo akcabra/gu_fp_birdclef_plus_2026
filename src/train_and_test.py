@@ -9,9 +9,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.audio import make_multicrop_tf_dataset, make_tf_dataset
 from src.config import load_config
 from src.data import attach_targets, build_label_space, load_tables, make_mixed_split, positive_class_weights, save_split
-from src.metrics import challenge_score_from_arrays, sigmoid
+from src.metrics import challenge_score_from_arrays
 from src.model import build_model
-from src.train import format_duration, predict_dataset, predict_multicrop_dataset, train_head_only
+from src.perch_blend import PerchScoreBlender
+from src.train import format_duration, predict_dataset_scores, predict_multicrop_dataset, train_head_only
 from src.utils import set_seed
 
 
@@ -38,6 +39,22 @@ def make_loss_weights(cfg: dict, train_rows):
     print(f"positive weight max: {weights.max():.3f}")
     print()
     return weights
+
+
+def make_perch_blender(cfg: dict, labels: list[str]) -> PerchScoreBlender | None:
+    if not cfg["perch_blend_enabled"]:
+        return None
+
+    blender = PerchScoreBlender(
+        labels,
+        cfg["perch_label_mapping_path"],
+        cfg["perch_blend_alpha"],
+    )
+    print("Perch score blend")
+    print(f"alpha: {blender.alpha:.3f}")
+    print(f"matched labels: {blender.matched_count}/{len(labels)}")
+    print()
+    return blender
 
 
 def validation_crop_offsets(cfg: dict) -> list[float]:
@@ -82,6 +99,8 @@ def print_experiment_summary(
     print(f"validation_crop_stride_seconds: {cfg['validation_crop_stride_seconds']}")
     print(f"validation_crop_aggregation: {cfg['validation_crop_aggregation']}")
     print(f"validation_top_k: {cfg['validation_top_k']}")
+    print(f"perch_blend_enabled: {cfg['perch_blend_enabled']}")
+    print(f"perch_blend_alpha: {cfg['perch_blend_alpha']}")
     print(f"best epoch: {best_epoch}")
     print(f"best val_challenge_score: {best_score:.5f}")
     print(f"final val_challenge_score: {final_score:.5f}")
@@ -121,6 +140,7 @@ def main():
         print(f"offsets_seconds: {offsets}")
         print()
     pos_weights = make_loss_weights(cfg, train_rows)
+    perch_blender = make_perch_blender(cfg, label_space.labels)
 
     model = build_model(cfg)
     print("Model")
@@ -137,14 +157,14 @@ def main():
         pos_weights,
         val_row_indices=val_row_indices,
         num_val_rows=len(val_rows),
+        perch_blender=perch_blender,
     )
     training_seconds = perf_counter() - train_start
     print(f"Total training time: {format_duration(training_seconds)}")
 
     eval_start = perf_counter()
     if val_row_indices is None:
-        y_true, logits = predict_dataset(model, val_ds)
-        scores = sigmoid(logits)
+        y_true, scores = predict_dataset_scores(model, val_ds, perch_blender)
     else:
         y_true, scores = predict_multicrop_dataset(
             model,
@@ -153,6 +173,7 @@ def main():
             len(val_rows),
             cfg["validation_crop_aggregation"],
             cfg["validation_top_k"],
+            perch_blender,
         )
     score = challenge_score_from_arrays(y_true, scores, label_space.labels)
     print(f"Evaluation time: {format_duration(perf_counter() - eval_start)}")

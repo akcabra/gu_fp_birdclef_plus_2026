@@ -48,6 +48,7 @@ class ChallengeScoreCallback(tf.keras.callbacks.Callback):
         num_rows: int | None = None,
         aggregation: str = "mean",
         top_k: int = 2,
+        perch_blender=None,
     ):
         super().__init__()
         self.val_ds = val_ds
@@ -56,13 +57,13 @@ class ChallengeScoreCallback(tf.keras.callbacks.Callback):
         self.num_rows = num_rows
         self.aggregation = aggregation
         self.top_k = top_k
+        self.perch_blender = perch_blender
         self.best = -np.inf
 
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
         if self.row_indices is None:
-            y_true, logits = predict_dataset(self.model, self.val_ds)
-            scores = sigmoid(logits)
+            y_true, scores = predict_dataset_scores(self.model, self.val_ds, self.perch_blender)
         else:
             y_true, scores = predict_multicrop_dataset(
                 self.model,
@@ -71,6 +72,7 @@ class ChallengeScoreCallback(tf.keras.callbacks.Callback):
                 self.num_rows,
                 self.aggregation,
                 self.top_k,
+                self.perch_blender,
             )
         value = challenge_score_from_arrays(y_true, scores, self.labels)
         logs["val_challenge_score"] = value
@@ -104,6 +106,7 @@ def train_head_only(
     pos_weights=None,
     val_row_indices=None,
     num_val_rows=None,
+    perch_blender=None,
 ):
     print("Starting head-only training")
     start = perf_counter()
@@ -119,6 +122,7 @@ def train_head_only(
             num_rows=num_val_rows,
             aggregation=cfg["validation_crop_aggregation"],
             top_k=cfg["validation_top_k"],
+            perch_blender=perch_blender,
         ),
         tf.keras.callbacks.ModelCheckpoint(
             checkpoint_dir / "best_head_only.weights.h5",
@@ -146,6 +150,21 @@ def predict_dataset(model: tf.keras.Model, ds) -> tuple[np.ndarray, np.ndarray]:
         targets.append(y_batch.numpy())
         logits.append(model.predict(x_batch, verbose=0))
     return np.concatenate(targets, axis=0), np.concatenate(logits, axis=0)
+
+
+def predict_dataset_scores(model: tf.keras.Model, ds, perch_blender=None) -> tuple[np.ndarray, np.ndarray]:
+    targets = []
+    scores = []
+    perch_layer = model.get_layer("perch") if perch_blender is not None else None
+    for x_batch, y_batch in ds:
+        targets.append(y_batch.numpy())
+        logits = model.predict(x_batch, verbose=0)
+        head_scores = sigmoid(logits)
+        if perch_blender is not None:
+            perch_outputs = perch_layer.saved_model_layer(x_batch, training=False)
+            head_scores = perch_blender.blend(head_scores, perch_outputs["label"].numpy())
+        scores.append(head_scores)
+    return np.concatenate(targets, axis=0), np.concatenate(scores, axis=0)
 
 
 def aggregate_crop_scores(
@@ -177,9 +196,9 @@ def predict_multicrop_dataset(
     num_rows: int,
     aggregation: str,
     top_k: int,
+    perch_blender=None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    crop_targets, crop_logits = predict_dataset(model, ds)
-    crop_scores = sigmoid(crop_logits)
+    crop_targets, crop_scores = predict_dataset_scores(model, ds, perch_blender)
     scores = aggregate_crop_scores(crop_scores, row_indices, num_rows, aggregation, top_k)
     targets = np.zeros((num_rows, crop_targets.shape[1]), dtype=np.float32)
     for row_idx in range(num_rows):

@@ -17,7 +17,7 @@ def load_config(path: str | Path = "config.yaml") -> dict[str, Any]:
         cfg = yaml.safe_load(f)
 
     cfg["project_root"] = str(PROJECT_ROOT)
-    for key in ["perch_model_path", "perch_cpu_model_path"]:
+    for key in ["perch_model_path", "perch_cpu_model_path", "perch_label_mapping_path"]:
         cfg[key] = str(_resolve_project_path(cfg[key]))
     for key in ["data_root"]:
         cfg[key] = str(Path(cfg[key]).expanduser())
