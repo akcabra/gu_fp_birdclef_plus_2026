@@ -84,7 +84,7 @@ def print_experiment_summary(
     final_score: float,
     training_seconds: float,
 ) -> None:
-    best_epoch, best_score = best_epoch_from_histories(head_history)
+    best_result = best_epoch_from_histories(head_history)
     print()
     print("Experiment summary")
     print(f"experiment name: {cfg['experiment_name']}")
@@ -101,8 +101,19 @@ def print_experiment_summary(
     print(f"validation_top_k: {cfg['validation_top_k']}")
     print(f"perch_blend_enabled: {cfg['perch_blend_enabled']}")
     print(f"perch_blend_alpha: {cfg['perch_blend_alpha']}")
-    print(f"best epoch: {best_epoch}")
-    print(f"best val_challenge_score: {best_score:.5f}")
+    print(f"train_enabled: {cfg['train_enabled']}")
+    print(f"load_model_weights_path: {cfg['load_model_weights_path']}")
+    print(f"save_model_weights_path: {cfg['save_model_weights_path']}")
+    print(f"save_best_model: {cfg['save_best_model']}")
+    print(f"best_model_weights_path: {cfg['best_model_weights_path']}")
+    print(f"restore_best_model: {cfg['restore_best_model']}")
+    if best_result is None:
+        print("best epoch: n/a")
+        print("best val_challenge_score: n/a")
+    else:
+        best_epoch, best_score = best_result
+        print(f"best epoch: {best_epoch}")
+        print(f"best val_challenge_score: {best_score:.5f}")
     print(f"final val_challenge_score: {final_score:.5f}")
     print(f"training time: {format_duration(training_seconds)}")
     print(f"notes: {cfg['notes']}")
@@ -147,19 +158,35 @@ def main():
     model.summary(print_fn=print)
     print()
 
+    if cfg["load_model_weights_path"]:
+        model.load_weights(cfg["load_model_weights_path"])
+        print(f"Loaded model weights from {cfg['load_model_weights_path']}")
+        print()
+
     train_start = perf_counter()
-    head_history = train_head_only(
-        model,
-        train_ds,
-        val_ds,
-        label_space.labels,
-        cfg,
-        pos_weights,
-        val_row_indices=val_row_indices,
-        num_val_rows=len(val_rows),
-        perch_blender=perch_blender,
-    )
+    if cfg["train_enabled"]:
+        head_history = train_head_only(
+            model,
+            train_ds,
+            val_ds,
+            label_space.labels,
+            cfg,
+            pos_weights,
+            val_row_indices=val_row_indices,
+            num_val_rows=len(val_rows),
+            perch_blender=perch_blender,
+        )
+    else:
+        print("Skipping training because train_enabled is false")
+        head_history = None
     training_seconds = perf_counter() - train_start
+
+    if cfg["save_model_weights_path"] and (cfg["train_enabled"] or cfg["load_model_weights_path"]):
+        save_model_weights_path = Path(cfg["save_model_weights_path"])
+        save_model_weights_path.parent.mkdir(parents=True, exist_ok=True)
+        model.save_weights(save_model_weights_path)
+        print(f"Saved model weights to {save_model_weights_path}")
+
     print(f"Total training time: {format_duration(training_seconds)}")
 
     eval_start = perf_counter()

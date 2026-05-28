@@ -19,6 +19,9 @@ def load_config(path: str | Path = "config.yaml") -> dict[str, Any]:
     cfg["project_root"] = str(PROJECT_ROOT)
     for key in ["perch_model_path", "perch_cpu_model_path", "perch_label_mapping_path"]:
         cfg[key] = str(_resolve_project_path(cfg[key]))
+    for key in ["load_model_weights_path", "save_model_weights_path", "best_model_weights_path"]:
+        if cfg[key]:
+            cfg[key] = str(_resolve_project_path(cfg[key]))
     for key in ["data_root"]:
         cfg[key] = str(Path(cfg[key]).expanduser())
     return cfg

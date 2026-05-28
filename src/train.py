@@ -111,8 +111,6 @@ def train_head_only(
     print("Starting head-only training")
     start = perf_counter()
     compile_model(model, cfg["head_lr"], cfg, pos_weights)
-    checkpoint_dir = Path("outputs") / "checkpoints"
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
     callbacks = [
         EpochTimingCallback(),
         ChallengeScoreCallback(
@@ -124,14 +122,19 @@ def train_head_only(
             top_k=cfg["validation_top_k"],
             perch_blender=perch_blender,
         ),
-        tf.keras.callbacks.ModelCheckpoint(
-            checkpoint_dir / "best_head_only.weights.h5",
-            monitor="val_challenge_score",
-            mode="max",
-            save_best_only=True,
-            save_weights_only=True,
-        ),
     ]
+    if cfg["save_best_model"]:
+        best_model_weights_path = Path(cfg["best_model_weights_path"])
+        best_model_weights_path.parent.mkdir(parents=True, exist_ok=True)
+        callbacks.append(
+            tf.keras.callbacks.ModelCheckpoint(
+                best_model_weights_path,
+                monitor="val_challenge_score",
+                mode="max",
+                save_best_only=True,
+                save_weights_only=True,
+            )
+        )
     history = model.fit(
         train_ds,
         validation_data=val_ds,
@@ -139,6 +142,9 @@ def train_head_only(
         callbacks=callbacks,
         verbose=2,
     )
+    if cfg["restore_best_model"] and cfg["save_best_model"]:
+        model.load_weights(cfg["best_model_weights_path"])
+        print(f"Loaded best model weights from {cfg['best_model_weights_path']}")
     print(f"Finished head-only training in {format_duration(perf_counter() - start)}")
     return history
 

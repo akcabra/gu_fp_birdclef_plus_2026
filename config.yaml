@@ -3,18 +3,25 @@ perch_model_path: models/perch_v2
 perch_cpu_model_path: models/perch_v2_cpu
 
 seed: 42
-experiment_name: perch_blend_08
+experiment_name: perch_mlp_base
 sampling: standard
 augmentation: random_crop
 notes: ""
-validation_num_crops: 5
+validation_num_crops: 1
 validation_crop_stride_seconds: 1.0
 validation_crop_aggregation: max # max or top_k_mean
 validation_top_k: 2
 
-perch_blend_enabled: true
+perch_blend_enabled: false
 perch_blend_alpha: 0.8
 perch_label_mapping_path: data/metadata/birdclef_to_perch_label_mapping.csv
+
+train_enabled: true
+load_model_weights_path: ""
+save_model_weights_path: outputs/checkpoints/latest.weights.h5
+save_best_model: true
+best_model_weights_path: outputs/checkpoints/best.weights.h5
+restore_best_model: true
 
 soundscape_val_fraction: 0.2
 focal_train_weight: 1.0
@@ -25,7 +32,7 @@ hidden_dim: 512
 dropout: 0.3
 
 batch_size: 16
-epochs_head: 4
+epochs_head: 12
 head_lr: 0.0003
 loss: bce
 weighted_bce_max_pos_weight: 2.0
