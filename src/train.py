@@ -143,7 +143,7 @@ def train_head_only(
         verbose=2,
     )
     if cfg["restore_best_model"] and cfg["save_best_model"]:
-        model.load_weights(cfg["best_model_weights_path"])
+        model.load_weights(cfg["best_model_weights_path"], skip_mismatch=True)
         print(f"Loaded best model weights from {cfg['best_model_weights_path']}")
     print(f"Finished head-only training in {format_duration(perf_counter() - start)}")
     return history

@@ -222,7 +222,7 @@ def main():
     print()
 
     if cfg["load_model_weights_path"]:
-        model.load_weights(cfg["load_model_weights_path"])
+        model.load_weights(cfg["load_model_weights_path"], skip_mismatch=True)
         print(f"Loaded model weights from {cfg['load_model_weights_path']}")
         print()
 
