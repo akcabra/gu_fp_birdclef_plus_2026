@@ -118,6 +118,15 @@ def attach_targets(rows: pd.DataFrame, label_space: LabelSpace) -> pd.DataFrame:
     return rows
 
 
+def positive_class_weights(rows: pd.DataFrame, max_weight: float) -> np.ndarray:
+    targets = np.stack(rows["target"].to_numpy())
+    positives = targets.sum(axis=0)
+    negatives = len(targets) - positives
+    weights = np.sqrt(negatives / np.maximum(positives, 1.0))
+    weights[positives == 0] = 1.0
+    return np.minimum(weights, max_weight).astype(np.float32)
+
+
 def save_split(train_rows: pd.DataFrame, val_rows: pd.DataFrame, out_dir: str | Path) -> None:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

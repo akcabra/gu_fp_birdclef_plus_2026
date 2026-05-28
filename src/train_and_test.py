@@ -8,7 +8,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.audio import make_tf_dataset
 from src.config import load_config
-from src.data import attach_targets, build_label_space, load_tables, make_mixed_split, save_split
+from src.data import attach_targets, build_label_space, load_tables, make_mixed_split, positive_class_weights, save_split
 from src.metrics import challenge_score_from_arrays, sigmoid
 from src.model import build_model
 from src.train import format_duration, predict_dataset, train_finetune, train_head_only
@@ -26,6 +26,18 @@ def print_data_summary(train_rows, val_rows) -> None:
     print(f"Training examples: {len(train_rows)}")
     print(f"Validation examples: {len(val_rows)}")
     print()
+
+
+def make_loss_weights(cfg: dict, train_rows):
+    if cfg["loss"] != "weighted_bce":
+        return None
+    weights = positive_class_weights(train_rows, cfg["weighted_bce_max_pos_weight"])
+    print("Weighted BCE")
+    print(f"positive weight min: {weights.min():.3f}")
+    print(f"positive weight mean: {weights.mean():.3f}")
+    print(f"positive weight max: {weights.max():.3f}")
+    print()
+    return weights
 
 
 def best_epoch_from_history(history, phase: str) -> tuple[str, float] | None:
@@ -64,6 +76,7 @@ def print_experiment_summary(
     print(f"augmentation: {cfg['augmentation']}")
     print(f"head_lr: {cfg['head_lr']}")
     print(f"dropout: {cfg['dropout']}")
+    print(f"weighted_bce_max_pos_weight: {cfg['weighted_bce_max_pos_weight']}")
     print(f"best epoch: {best_epoch}")
     print(f"best val_challenge_score: {best_score:.5f}")
     print(f"final val_challenge_score: {final_score:.5f}")
@@ -94,6 +107,7 @@ def main():
 
     train_ds = make_tf_dataset(train_rows, batch_size=cfg["batch_size"], training=True)
     val_ds = make_tf_dataset(val_rows, batch_size=cfg["batch_size"], training=False)
+    pos_weights = make_loss_weights(cfg, train_rows)
 
     model = build_model(cfg, trainable_backbone=False)
     print("Model")
@@ -101,8 +115,8 @@ def main():
     print()
 
     train_start = perf_counter()
-    head_history = train_head_only(model, train_ds, val_ds, label_space.labels, cfg)
-    finetune_history = train_finetune(model, train_ds, val_ds, label_space.labels, cfg)
+    head_history = train_head_only(model, train_ds, val_ds, label_space.labels, cfg, pos_weights)
+    finetune_history = train_finetune(model, train_ds, val_ds, label_space.labels, cfg, pos_weights)
     training_seconds = perf_counter() - train_start
     print(f"Total training time: {format_duration(training_seconds)}")
 
