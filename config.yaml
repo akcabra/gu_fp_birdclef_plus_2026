@@ -29,6 +29,30 @@ embedding_cache_focal_crops_per_recording: 10
 train_embedding_cache_path: outputs/embedding_cache/train_embeddings_new.npz
 val_embedding_cache_path: outputs/embedding_cache/val_embeddings_new.npz
 
+# PaSST is a separate frozen-embedding pipeline. Run it with:
+# python -m src.passt.check_setup
+# python -m src.passt.train_and_test
+passt_device: auto
+passt_arch: ""
+passt_clip_seconds: 5.0
+passt_input_seconds: 10.0
+passt_batch_size: 16
+passt_cache_include_logits: false
+passt_cache_focal_crops_per_recording: 10
+write_passt_cache: false
+passt_train_cache_path: outputs/passt_cache/train_embeddings.npz
+passt_val_cache_path: outputs/passt_cache/val_embeddings.npz
+passt_load_model_weights_path: ""
+passt_save_best_model: false
+passt_best_model_weights_path: outputs/checkpoints/passt_best.pt
+passt_save_model_weights_path: outputs/checkpoints/passt_latest.pt
+passt_val_predictions_path: outputs/predictions/passt_val_predictions.npz
+
+# Prediction-level validation blending. Generate Perch and PaSST validation
+# prediction npz files, then run: python -m src.ensemble_predictions
+perch_val_predictions_path: outputs/predictions/perch_val_predictions.npz
+ensemble_val_predictions_path: outputs/predictions/ensemble_val_predictions.npz
+
 train_enabled: train
 load_model_weights_path: "" # "outputs/checkpoints/best_25_2.weights.h5"
 save_best_model: false
