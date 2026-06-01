@@ -37,14 +37,28 @@ def load_clip_np(
     return crop_or_pad(audio, start_seconds=start, random_crop=random_crop)
 
 
-def make_tf_dataset(rows, batch_size: int, training: bool):
+def make_tf_dataset(rows, batch_size: int, training: bool, sample_weights: np.ndarray | None = None, seed: int = 42):
     paths = rows["audio_path"].astype(str).to_numpy()
     sources = rows["source"].astype(str).to_numpy()
     starts = rows["start_seconds"].fillna(-1).astype(np.float32).to_numpy()
     targets = np.stack(rows["target"].to_numpy()).astype(np.float32)
 
-    ds = tf.data.Dataset.from_tensor_slices((paths, sources, starts, targets))
-    if training:
+    if training and sample_weights is not None:
+        log_probs = tf.math.log(tf.constant(sample_weights / sample_weights.sum(), dtype=tf.float32))[tf.newaxis, :]
+        paths = tf.constant(paths)
+        sources = tf.constant(sources)
+        starts = tf.constant(starts)
+        targets = tf.constant(targets)
+
+        def _sample(_):
+            index = tf.random.categorical(log_probs, 1, seed=seed)[0, 0]
+            return tf.gather(paths, index), tf.gather(sources, index), tf.gather(starts, index), tf.gather(targets, index)
+
+        ds = tf.data.Dataset.range(len(targets)).map(_sample, num_parallel_calls=tf.data.AUTOTUNE)
+    else:
+        ds = tf.data.Dataset.from_tensor_slices((paths, sources, starts, targets))
+
+    if training and sample_weights is None:
         ds = ds.shuffle(min(len(rows), 4096), reshuffle_each_iteration=True)
 
     def _load(path, source, start, target):

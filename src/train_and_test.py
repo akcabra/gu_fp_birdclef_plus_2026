@@ -78,10 +78,59 @@ def expand_focal_rows(rows, crops_per_focal: int):
     return pd.concat(parts, ignore_index=True)
 
 
-def make_datasets(cfg: dict, train_rows, val_rows, labels: list[str]):
+def row_sampling_weights(cfg: dict, rows, labels: list[str], taxonomy, perch_mapping) -> pd.Series:
+    weights = pd.Series(1.0, index=rows.index, dtype="float64")
+    if cfg["sampling"] != "weighted":
+        return weights
+
+    train_counts = {label: 0 for label in labels}
+    for row_labels in rows["labels"]:
+        for label in row_labels:
+            label = str(label)
+            if label in train_counts:
+                train_counts[label] += 1
+
+    rare_labels = {label for label, count in train_counts.items() if 0 < count <= cfg["weighted_sampling_rare_threshold"]}
+    matched_labels = set(perch_mapping.loc[perch_mapping["perch_index"].notna(), "primary_label"].astype(str))
+    unmatched_labels = set(labels) - matched_labels
+    taxonomy_by_label = taxonomy.set_index(taxonomy["primary_label"].astype(str))
+    taxon_labels = set()
+    for class_name in cfg["weighted_sampling_taxa"]:
+        taxon_labels.update(taxonomy_by_label.loc[taxonomy_by_label["class_name"] == class_name].index.astype(str))
+
+    for idx, row_labels in rows["labels"].items():
+        row_label_set = {str(label) for label in row_labels}
+        if row_label_set & rare_labels:
+            weights.loc[idx] *= cfg["weighted_sampling_rare_multiplier"]
+        if row_label_set & unmatched_labels:
+            weights.loc[idx] *= cfg["weighted_sampling_unmatched_multiplier"]
+        if row_label_set & taxon_labels:
+            weights.loc[idx] *= cfg["weighted_sampling_taxa_multiplier"]
+
+    return weights.clip(upper=cfg["weighted_sampling_max_weight"])
+
+
+def print_sampling_summary(weights: pd.Series) -> None:
+    print("Weighted sampling")
+    print(f"sample weight min: {weights.min():.3f}")
+    print(f"sample weight mean: {weights.mean():.3f}")
+    print(f"sample weight max: {weights.max():.3f}")
+    print()
+
+
+def make_datasets(cfg: dict, train_rows, val_rows, labels: list[str], taxonomy, perch_mapping):
     offsets = validation_crop_offsets(cfg)
     if not cfg["embedding_cache_enabled"]:
-        train_ds = make_tf_dataset(train_rows, batch_size=cfg["batch_size"], training=True)
+        sample_weights = row_sampling_weights(cfg, train_rows, labels, taxonomy, perch_mapping)
+        if cfg["sampling"] == "weighted":
+            print_sampling_summary(sample_weights)
+        train_ds = make_tf_dataset(
+            train_rows,
+            batch_size=cfg["batch_size"],
+            training=True,
+            sample_weights=sample_weights.to_numpy(dtype="float64") if cfg["sampling"] == "weighted" else None,
+            seed=cfg["seed"],
+        )
         if cfg["validation_num_crops"] == 1:
             val_ds = make_tf_dataset(val_rows, batch_size=cfg["batch_size"], training=False)
             val_row_indices = None
@@ -118,7 +167,21 @@ def make_datasets(cfg: dict, train_rows, val_rows, labels: list[str]):
 
     train_cache = load_embedding_cache(train_cache_path)
     val_cache = load_embedding_cache(val_cache_path)
-    train_ds = make_embedding_dataset(train_cache, cfg["batch_size"], training=True)
+    sample_weights = row_sampling_weights(cfg, cache_train_rows, labels, taxonomy, perch_mapping)
+    if len(sample_weights) != len(train_cache["targets"]):
+        raise ValueError(
+            "Embedding cache size does not match training rows. "
+            "Regenerate the cache after changing embedding_cache_focal_crops_per_recording or split settings."
+        )
+    if cfg["sampling"] == "weighted":
+        print_sampling_summary(sample_weights)
+    train_ds = make_embedding_dataset(
+        train_cache,
+        cfg["batch_size"],
+        training=True,
+        sample_weights=sample_weights.to_numpy(dtype="float64") if cfg["sampling"] == "weighted" else None,
+        seed=cfg["seed"],
+    )
     val_ds = make_embedding_dataset(val_cache, cfg["batch_size"], training=False)
     val_row_indices = val_cache["row_indices"] if "row_indices" in val_cache else None
 
@@ -223,6 +286,12 @@ def print_experiment_summary(
     print(f"seed: {cfg['seed']}")
     print(f"loss: {cfg['loss']}")
     print(f"sampling: {cfg['sampling']}")
+    print(f"weighted_sampling_rare_threshold: {cfg['weighted_sampling_rare_threshold']}")
+    print(f"weighted_sampling_rare_multiplier: {cfg['weighted_sampling_rare_multiplier']}")
+    print(f"weighted_sampling_unmatched_multiplier: {cfg['weighted_sampling_unmatched_multiplier']}")
+    print(f"weighted_sampling_taxa: {cfg['weighted_sampling_taxa']}")
+    print(f"weighted_sampling_taxa_multiplier: {cfg['weighted_sampling_taxa_multiplier']}")
+    print(f"weighted_sampling_max_weight: {cfg['weighted_sampling_max_weight']}")
     print(f"augmentation: {cfg['augmentation']}")
     print(f"head_lr: {cfg['head_lr']}")
     print(f"dropout: {cfg['dropout']}")
@@ -279,7 +348,15 @@ def main():
     print_data_summary(train_rows, val_rows)
     save_split(train_rows, val_rows, PROJECT_ROOT / "data" / "splits")
 
-    train_ds, val_ds, val_row_indices, loss_weight_rows = make_datasets(cfg, train_rows, val_rows, label_space.labels)
+    perch_mapping = pd.read_csv(cfg["perch_label_mapping_path"])
+    train_ds, val_ds, val_row_indices, loss_weight_rows = make_datasets(
+        cfg,
+        train_rows,
+        val_rows,
+        label_space.labels,
+        taxonomy,
+        perch_mapping,
+    )
     pos_weights = make_loss_weights(cfg, loss_weight_rows)
     perch_blender = make_perch_blender(cfg, label_space.labels)
 
@@ -336,7 +413,6 @@ def main():
     print(f"Evaluation time: {format_duration(perf_counter() - eval_start)}")
     print(f"validation challenge score: {score:.5f}")
     soundscape_train_rows = train_rows[train_rows["source"] == "soundscape"]
-    perch_mapping = pd.read_csv(cfg["perch_label_mapping_path"])
     group_summary = validation_group_summary(
         y_true,
         scores,

@@ -37,10 +37,23 @@ def load_embedding_cache(path: str | Path):
     return np.load(path)
 
 
-def make_embedding_dataset(cache, batch_size: int, training: bool):
+def make_embedding_dataset(cache, batch_size: int, training: bool, sample_weights: np.ndarray | None = None, seed: int = 42):
     embeddings = cache["embeddings"].astype(np.float32)
     mapped_perch_scores = cache["mapped_perch_scores"].astype(np.float32)
     targets = cache["targets"].astype(np.float32)
+
+    if training and sample_weights is not None:
+        log_probs = tf.math.log(tf.constant(sample_weights / sample_weights.sum(), dtype=tf.float32))[tf.newaxis, :]
+        embeddings = tf.constant(embeddings)
+        mapped_perch_scores = tf.constant(mapped_perch_scores)
+        targets = tf.constant(targets)
+
+        def sample_example(_):
+            index = tf.random.categorical(log_probs, 1, seed=seed)[0, 0]
+            return (tf.gather(embeddings, index), tf.gather(mapped_perch_scores, index)), tf.gather(targets, index)
+
+        ds = tf.data.Dataset.range(len(targets)).map(sample_example, num_parallel_calls=tf.data.AUTOTUNE)
+        return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
     ds = tf.data.Dataset.from_tensor_slices(((embeddings, mapped_perch_scores), targets))
     if training:
