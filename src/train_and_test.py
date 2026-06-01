@@ -72,6 +72,8 @@ def validation_crop_offsets(cfg: dict) -> list[float]:
 
 
 def expand_focal_rows(rows, crops_per_focal: int):
+    rows = rows.reset_index(drop=True).copy()
+    rows["source_row_index"] = range(len(rows))
     focal_rows = rows[rows["source"] == "focal"]
     other_rows = rows[rows["source"] != "focal"]
     parts = [focal_rows] * crops_per_focal + [other_rows]
@@ -151,7 +153,13 @@ def make_datasets(cfg: dict, train_rows, val_rows, labels: list[str], taxonomy, 
 
         train_raw_ds = make_tf_dataset(cache_train_rows, batch_size=cfg["batch_size"], training=True)
         print(f"Writing train embedding cache to {train_cache_path}")
-        write_embedding_cache(raw_model, train_raw_ds, train_cache_path, perch_mapper)
+        write_embedding_cache(
+            raw_model,
+            train_raw_ds,
+            train_cache_path,
+            perch_mapper,
+            source_row_indices=cache_train_rows["source_row_index"].to_numpy(dtype="int32"),
+        )
 
         if cfg["validation_num_crops"] == 1:
             val_raw_ds = make_tf_dataset(val_rows, batch_size=cfg["batch_size"], training=False)
@@ -167,12 +175,15 @@ def make_datasets(cfg: dict, train_rows, val_rows, labels: list[str], taxonomy, 
 
     train_cache = load_embedding_cache(train_cache_path)
     val_cache = load_embedding_cache(val_cache_path)
-    sample_weights = row_sampling_weights(cfg, cache_train_rows, labels, taxonomy, perch_mapping)
-    if len(sample_weights) != len(train_cache["targets"]):
+    if "source_row_indices" not in train_cache:
+        raise ValueError("Training embedding cache does not include source_row_indices. Regenerate the cache.")
+    if len(cache_train_rows) != len(train_cache["targets"]):
         raise ValueError(
             "Embedding cache size does not match training rows. "
             "Regenerate the cache after changing embedding_cache_focal_crops_per_recording or split settings."
         )
+    source_rows = train_rows.reset_index(drop=True)
+    sample_weights = row_sampling_weights(cfg, source_rows, labels, taxonomy, perch_mapping)
     if cfg["sampling"] == "weighted":
         print_sampling_summary(sample_weights)
     train_ds = make_embedding_dataset(

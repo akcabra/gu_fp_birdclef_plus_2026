@@ -3,14 +3,15 @@ perch_model_path: models/perch_v2
 perch_cpu_model_path: models/perch_v2_cpu
 
 seed: 42
-experiment_name: perch_mlp_saved_embeddings_25_epochs_focal_weighted_updated_2
-sampling: weighted # standard or weighted
+experiment_name: perch_mlp_new_embeddings
+sampling: standard # standard or weighted
 weighted_sampling_rare_threshold: 10
 weighted_sampling_rare_multiplier: 3.0
 weighted_sampling_unmatched_multiplier: 2.0
 weighted_sampling_taxa: ["Insecta", "Reptilia"]
 weighted_sampling_taxa_multiplier: 1.5
 weighted_sampling_max_weight: 5.0
+
 augmentation: random_crop
 notes: ""
 validation_num_crops: 1
@@ -23,16 +24,15 @@ perch_blend_alpha: 0.8
 perch_label_mapping_path: data/metadata/birdclef_to_perch_label_mapping.csv
 
 embedding_cache_enabled: true
-write_embedding_cache: false
-embedding_cache_focal_crops_per_recording: 3
-train_embedding_cache_path: outputs/embedding_cache/train_embeddings.npz
-val_embedding_cache_path: outputs/embedding_cache/val_embeddings.npz
+write_embedding_cache: true
+embedding_cache_focal_crops_per_recording: 10
+train_embedding_cache_path: outputs/embedding_cache/train_embeddings_new.npz
+val_embedding_cache_path: outputs/embedding_cache/val_embeddings_new.npz
 
 train_enabled: train
 load_model_weights_path: "" # "outputs/checkpoints/best_25_2.weights.h5"
-save_best_model: true
+save_best_model: false
 best_model_weights_path: outputs/checkpoints/focal_weighted_best.weights.h5
-restore_best_model: true
 save_model_weights_path: outputs/checkpoints/focal_weighted_latest.weights.h5
 restore_best_model: true
 
