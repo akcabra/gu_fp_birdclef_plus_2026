@@ -4,7 +4,6 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
-import tensorflow as tf
 
 def crop_or_pad(
     audio: np.ndarray,
@@ -38,6 +37,8 @@ def load_clip_np(
 
 
 def make_tf_dataset(rows, batch_size: int, training: bool, sample_weights: np.ndarray | None = None, seed: int = 42):
+    import tensorflow as tf
+
     paths = rows["audio_path"].astype(str).to_numpy()
     sources = rows["source"].astype(str).to_numpy()
     starts = rows["start_seconds"].fillna(-1).astype(np.float32).to_numpy()
@@ -82,6 +83,8 @@ def make_tf_dataset(rows, batch_size: int, training: bool, sample_weights: np.nd
 
 
 def make_multicrop_tf_dataset(rows, batch_size: int, offsets_seconds: list[float]):
+    import tensorflow as tf
+
     paths = []
     sources = []
     starts = []

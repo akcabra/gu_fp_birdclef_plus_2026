@@ -1,0 +1,9 @@
+torch
+torchaudio
+hear21passt
+timm
+numpy
+pandas
+scikit-learn
+pyyaml
+soundfile
