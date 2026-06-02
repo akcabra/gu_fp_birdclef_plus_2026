@@ -68,6 +68,7 @@ class PaSSTWaveformDataset(Dataset):
     def __init__(self, rows, training: bool, row_indices: np.ndarray | None = None) -> None:
         self.paths = rows["audio_path"].astype(str).to_numpy()
         self.sources = rows["source"].astype(str).to_numpy()
+        self.source_ids = np.asarray([0 if source == "focal" else 1 for source in self.sources], dtype=np.int64)
         self.starts = rows["start_seconds"].fillna(-1).astype(np.float32).to_numpy()
         self.targets = np.stack(rows["target"].to_numpy()).astype(np.float32)
         self.training = training
@@ -84,9 +85,10 @@ class PaSSTWaveformDataset(Dataset):
             self.training,
         )
         target = self.targets[index]
+        source_id = self.source_ids[index]
         if self.row_indices is None:
-            return waveform, target
-        return waveform, target, np.int32(self.row_indices[index])
+            return waveform, target, source_id
+        return waveform, target, source_id, np.int32(self.row_indices[index])
 
 
 class OnlinePaSSTClassifier(nn.Module):
@@ -385,13 +387,62 @@ def iter_train_batches(
         yield embeddings[batch_indices], targets[batch_indices]
 
 
-def apply_mixup(specs: torch.Tensor, targets: torch.Tensor, alpha: float) -> tuple[torch.Tensor, torch.Tensor]:
+def mixup_partner_indices(source_ids: torch.Tensor, mode: str) -> torch.Tensor | None:
+    indices = torch.arange(source_ids.shape[0], device=source_ids.device)
+    if mode == "batch":
+        return indices[torch.randperm(len(indices), device=source_ids.device)]
+    if mode == "same_source":
+        partner_indices = indices.clone()
+        for source_id in torch.unique(source_ids):
+            group = indices[source_ids == source_id]
+            if len(group) > 1:
+                partner_indices[group] = group[torch.randperm(len(group), device=source_ids.device)]
+        return partner_indices
+    if mode == "focal_only":
+        group = indices[source_ids == 0]
+    elif mode == "soundscape_only":
+        group = indices[source_ids == 1]
+    else:
+        raise ValueError(f"Unknown passt_mixup_mode: {mode}")
+
+    if len(group) < 2:
+        return None
+    partner_indices = indices.clone()
+    partner_indices[group] = group[torch.randperm(len(group), device=source_ids.device)]
+    return partner_indices
+
+
+def apply_mixup(
+    specs: torch.Tensor,
+    targets: torch.Tensor,
+    source_ids: torch.Tensor,
+    cfg: dict,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    alpha = cfg["passt_mixup_alpha"]
     if alpha <= 0:
         return specs, targets
-    lam = np.random.beta(alpha, alpha)
-    indices = torch.randperm(specs.shape[0], device=specs.device)
-    mixed_specs = lam * specs + (1.0 - lam) * specs[indices]
-    mixed_targets = lam * targets + (1.0 - lam) * targets[indices]
+    if np.random.random() > cfg["passt_mixup_probability"]:
+        return specs, targets
+
+    indices = mixup_partner_indices(source_ids, cfg["passt_mixup_mode"])
+    if indices is None:
+        return specs, targets
+
+    lam = torch.distributions.Beta(alpha, alpha).sample((specs.shape[0],)).to(specs.device)
+    if cfg["passt_mixup_mode"] == "focal_only":
+        lam = torch.where(source_ids == 0, lam, torch.ones_like(lam))
+    elif cfg["passt_mixup_mode"] == "soundscape_only":
+        lam = torch.where(source_ids == 1, lam, torch.ones_like(lam))
+
+    spec_lam = lam.view(-1, 1, 1)
+    target_lam = lam.view(-1, 1)
+    mixed_specs = spec_lam * specs + (1.0 - spec_lam) * specs[indices]
+    if cfg["passt_mixup_target_mode"] == "linear":
+        mixed_targets = target_lam * targets + (1.0 - target_lam) * targets[indices]
+    elif cfg["passt_mixup_target_mode"] == "max":
+        mixed_targets = torch.maximum(targets, targets[indices])
+    else:
+        raise ValueError(f"Unknown passt_mixup_target_mode: {cfg['passt_mixup_target_mode']}")
     return mixed_specs, mixed_targets
 
 
@@ -451,11 +502,11 @@ def predict_online(model, loader: DataLoader, device: torch.device):
     row_indices = []
     with torch.no_grad():
         for batch in loader:
-            if len(batch) == 3:
-                x, y, rows = batch
+            if len(batch) == 4:
+                x, y, _, rows = batch
                 row_indices.append(rows.numpy())
             else:
-                x, y = batch
+                x, y, _ = batch
             x = x.to(device)
             logits.append(model(x).cpu().numpy())
             targets.append(y.numpy())
@@ -612,13 +663,14 @@ def run_online_training(
             model.train()
             model.passt.mel.eval()
             losses = []
-            for x, y in train_loader:
+            for x, y, source_ids in train_loader:
                 x = x.to(device)
                 y = y.to(device)
+                source_ids = source_ids.to(device)
                 optimizer.zero_grad(set_to_none=True)
                 specs = model.passt.mel(x)
                 if cfg["passt_mixup_enabled"]:
-                    specs, y = apply_mixup(specs, y, cfg["passt_mixup_alpha"])
+                    specs, y = apply_mixup(specs, y, source_ids, cfg)
                 if cfg["passt_specaugment_enabled"]:
                     specs = apply_specaugment(
                         specs,
@@ -707,6 +759,9 @@ def run_online_training(
     print(f"passt_train_backbone: {cfg['passt_train_backbone']}", flush=True)
     print(f"passt_unfreeze_last_n_blocks: {cfg['passt_unfreeze_last_n_blocks']}", flush=True)
     print(f"passt_mixup_enabled: {cfg['passt_mixup_enabled']}", flush=True)
+    print(f"passt_mixup_mode: {cfg['passt_mixup_mode']}", flush=True)
+    print(f"passt_mixup_target_mode: {cfg['passt_mixup_target_mode']}", flush=True)
+    print(f"passt_mixup_probability: {cfg['passt_mixup_probability']}", flush=True)
     print(f"passt_specaugment_enabled: {cfg['passt_specaugment_enabled']}", flush=True)
     if best_epoch is None:
         print("best epoch: n/a", flush=True)
