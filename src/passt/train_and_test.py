@@ -19,6 +19,7 @@ from src.config import load_config
 from src.data import attach_targets, build_label_space, load_tables, make_mixed_split, positive_class_weights, save_split
 from src.metrics import challenge_score_from_arrays, per_class_auc, sigmoid
 from src.passt.cache import load_passt_cache, write_passt_cache
+from src.passt.progress import print_progress
 
 
 def format_duration(seconds: float) -> str:
@@ -60,16 +61,16 @@ class PaSSTHead(nn.Module):
 
 
 def print_run_header(cfg: dict) -> None:
-    print("Run configuration")
-    print(pformat(cfg, sort_dicts=True))
-    print()
+    print_progress("Run configuration")
+    print(pformat(cfg, sort_dicts=True), flush=True)
+    print(flush=True)
 
 
 def print_data_summary(train_rows, val_rows) -> None:
-    print("Data")
-    print(f"Training examples: {len(train_rows)}")
-    print(f"Validation examples: {len(val_rows)}")
-    print()
+    print_progress("Data")
+    print(f"Training examples: {len(train_rows)}", flush=True)
+    print(f"Validation examples: {len(val_rows)}", flush=True)
+    print(flush=True)
 
 
 def validation_crop_offsets(cfg: dict) -> list[float]:
@@ -144,22 +145,22 @@ def row_sampling_weights(cfg: dict, rows, labels: list[str], taxonomy, perch_map
 
 
 def print_sampling_summary(weights: pd.Series) -> None:
-    print("Weighted sampling")
-    print(f"sample weight min: {weights.min():.3f}")
-    print(f"sample weight mean: {weights.mean():.3f}")
-    print(f"sample weight max: {weights.max():.3f}")
-    print()
+    print_progress("Weighted sampling")
+    print(f"sample weight min: {weights.min():.3f}", flush=True)
+    print(f"sample weight mean: {weights.mean():.3f}", flush=True)
+    print(f"sample weight max: {weights.max():.3f}", flush=True)
+    print(flush=True)
 
 
 def make_loss_weights(cfg: dict, train_rows):
     if cfg["loss"] != "weighted_bce":
         return None
     weights = positive_class_weights(train_rows, cfg["weighted_bce_max_pos_weight"])
-    print("Weighted BCE")
-    print(f"positive weight min: {weights.min():.3f}")
-    print(f"positive weight mean: {weights.mean():.3f}")
-    print(f"positive weight max: {weights.max():.3f}")
-    print()
+    print_progress("Weighted BCE")
+    print(f"positive weight min: {weights.min():.3f}", flush=True)
+    print(f"positive weight mean: {weights.mean():.3f}", flush=True)
+    print(f"positive weight max: {weights.max():.3f}", flush=True)
+    print(flush=True)
     return weights
 
 
@@ -213,12 +214,12 @@ def validation_group_summary(
 
 
 def print_validation_group_summary(summary: pd.DataFrame) -> None:
-    print()
-    print("Validation group summary")
+    print(flush=True)
+    print_progress("Validation group summary")
     out = summary.copy()
     out["mean_auc"] = out["mean_auc"].map(lambda value: "n/a" if pd.isna(value) else f"{value:.5f}")
     out["median_auc"] = out["median_auc"].map(lambda value: "n/a" if pd.isna(value) else f"{value:.5f}")
-    print(out.to_string(index=False))
+    print(out.to_string(index=False), flush=True)
 
 
 def aggregate_crop_scores(scores: np.ndarray, row_indices: np.ndarray, num_rows: int, aggregation: str, top_k: int) -> np.ndarray:
@@ -319,6 +320,7 @@ def load_checkpoint(path: str | Path, model, device: torch.device) -> None:
 
 def make_passt_caches_if_needed(cfg: dict, train_rows, val_rows):
     offsets = validation_crop_offsets(cfg)
+    input_samples = int(32000 * cfg["passt_input_seconds"])
     train_cache_path = Path(cfg["passt_train_cache_path"])
     val_cache_path = Path(cfg["passt_val_cache_path"])
     if not cfg["write_passt_cache"] and train_cache_path.exists() and val_cache_path.exists():
@@ -327,11 +329,11 @@ def make_passt_caches_if_needed(cfg: dict, train_rows, val_rows):
     cache_train_rows = expand_focal_rows(train_rows, cfg["passt_cache_focal_crops_per_recording"])
     val_cache_rows = make_passt_val_rows(val_rows, offsets)
     if len(offsets) > 1:
-        print("Validation crops")
-        print(f"offsets_seconds: {offsets}")
-        print()
+        print_progress("Validation crops")
+        print(f"offsets_seconds: {offsets}", flush=True)
+        print(flush=True)
 
-    print(f"Writing PaSST train embedding cache to {train_cache_path}")
+    print_progress(f"Writing PaSST train embedding cache to {train_cache_path}")
     write_passt_cache(
         cache_train_rows,
         train_cache_path,
@@ -339,9 +341,9 @@ def make_passt_caches_if_needed(cfg: dict, train_rows, val_rows):
         device=cfg["passt_device"],
         arch=cfg["passt_arch"],
         include_logits=cfg["passt_cache_include_logits"],
-        input_samples=int(32000 * cfg["passt_input_seconds"]),
+        input_samples=input_samples,
     )
-    print(f"Writing PaSST validation embedding cache to {val_cache_path}")
+    print_progress(f"Writing PaSST validation embedding cache to {val_cache_path}")
     write_passt_cache(
         val_cache_rows,
         val_cache_path,
@@ -349,7 +351,7 @@ def make_passt_caches_if_needed(cfg: dict, train_rows, val_rows):
         device=cfg["passt_device"],
         arch=cfg["passt_arch"],
         include_logits=cfg["passt_cache_include_logits"],
-        input_samples=int(32000 * cfg["passt_input_seconds"]),
+        input_samples=input_samples,
     )
 
 
@@ -389,13 +391,13 @@ def main():
     val_row_indices = val_cache["row_indices"] if "row_indices" in val_cache else None
     embedding_dim = train_embeddings.shape[1]
 
-    print("PaSST embedding cache")
-    print(f"train cache: {cfg['passt_train_cache_path']}")
-    print(f"validation cache: {cfg['passt_val_cache_path']}")
-    print(f"training examples: {len(train_targets)}")
-    print(f"validation examples: {len(val_targets)}")
-    print(f"embedding dim: {embedding_dim}")
-    print()
+    print_progress("PaSST embedding cache")
+    print(f"train cache: {cfg['passt_train_cache_path']}", flush=True)
+    print(f"validation cache: {cfg['passt_val_cache_path']}", flush=True)
+    print(f"training examples: {len(train_targets)}", flush=True)
+    print(f"validation examples: {len(val_targets)}", flush=True)
+    print(f"embedding dim: {embedding_dim}", flush=True)
+    print(flush=True)
 
     sample_weights = row_sampling_weights(cfg, train_rows.reset_index(drop=True), label_space.labels, taxonomy, perch_mapping)
     if cfg["sampling"] == "weighted":
@@ -406,18 +408,18 @@ def main():
 
     pos_weights_np = make_loss_weights(cfg, expand_focal_rows(train_rows, cfg["passt_cache_focal_crops_per_recording"]))
     device = torch.device(cfg["passt_device"] if cfg["passt_device"] != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
-    print(f"PyTorch device: {device}")
-    print()
+    print_progress(f"PyTorch device: {device}")
+    print(flush=True)
 
     model = PaSSTHead(embedding_dim, cfg["hidden_dim"], cfg["dropout"], cfg["head_type"]).to(device)
-    print("Model")
-    print(model)
-    print()
+    print_progress("Model")
+    print(model, flush=True)
+    print(flush=True)
 
     if cfg["passt_load_model_weights_path"]:
         load_checkpoint(cfg["passt_load_model_weights_path"], model, device)
-        print(f"Loaded PaSST head weights from {cfg['passt_load_model_weights_path']}")
-        print()
+        print_progress(f"Loaded PaSST head weights from {cfg['passt_load_model_weights_path']}")
+        print(flush=True)
 
     pos_weights = None if pos_weights_np is None else torch.from_numpy(pos_weights_np).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg["head_lr"])
@@ -427,7 +429,7 @@ def main():
 
     train_start = perf_counter()
     if cfg["train_enabled"]:
-        print("Starting PaSST head training")
+        print_progress("Starting PaSST head training")
         for epoch in range(cfg["epochs_head"]):
             epoch_start = perf_counter()
             model.train()
@@ -464,10 +466,10 @@ def main():
                 for row_idx in range(len(val_rows)):
                     y_true[row_idx] = crop_true[np.flatnonzero(val_row_indices == row_idx)[0]]
             score = challenge_score_from_arrays(y_true, scores, label_space.labels)
-            print(f"Epoch {epoch + 1}/{cfg['epochs_head']}")
-            print(f" - epoch_time: {format_duration(perf_counter() - epoch_start)}")
-            print(f" - loss: {np.mean(losses):.6f}")
-            print(f" - val_challenge_score: {score:.5f}")
+            print_progress(f"Epoch {epoch + 1}/{cfg['epochs_head']}")
+            print(f" - epoch_time: {format_duration(perf_counter() - epoch_start)}", flush=True)
+            print(f" - loss: {np.mean(losses):.6f}", flush=True)
+            print(f" - val_challenge_score: {score:.5f}", flush=True)
 
             if score > best_score:
                 best_score = score
@@ -476,16 +478,16 @@ def main():
                     save_checkpoint(cfg["passt_best_model_weights_path"], model, cfg, embedding_dim)
         if cfg["restore_best_model"] and cfg["passt_save_best_model"] and cfg["passt_best_model_weights_path"]:
             load_checkpoint(cfg["passt_best_model_weights_path"], model, device)
-            print(f"Loaded best PaSST head weights from {cfg['passt_best_model_weights_path']}")
+            print_progress(f"Loaded best PaSST head weights from {cfg['passt_best_model_weights_path']}")
     else:
-        print("Skipping training because train_enabled is false")
+        print_progress("Skipping training because train_enabled is false")
     training_seconds = perf_counter() - train_start
 
     if cfg["passt_save_model_weights_path"] and (cfg["train_enabled"] or cfg["passt_load_model_weights_path"]):
         save_checkpoint(cfg["passt_save_model_weights_path"], model, cfg, embedding_dim)
-        print(f"Saved PaSST head weights to {cfg['passt_save_model_weights_path']}")
+        print_progress(f"Saved PaSST head weights to {cfg['passt_save_model_weights_path']}")
 
-    print(f"Total training time: {format_duration(training_seconds)}")
+    print_progress(f"Total training time: {format_duration(training_seconds)}")
 
     eval_start = perf_counter()
     crop_true, crop_scores = predict_arrays(model, val_embeddings, val_targets, cfg["batch_size"], device)
@@ -503,14 +505,14 @@ def main():
         for row_idx in range(len(val_rows)):
             y_true[row_idx] = crop_true[np.flatnonzero(val_row_indices == row_idx)[0]]
     score = challenge_score_from_arrays(y_true, scores, label_space.labels)
-    print(f"Evaluation time: {format_duration(perf_counter() - eval_start)}")
-    print(f"validation challenge score: {score:.5f}")
+    print_progress(f"Evaluation time: {format_duration(perf_counter() - eval_start)}")
+    print(f"validation challenge score: {score:.5f}", flush=True)
 
     if cfg["passt_val_predictions_path"]:
         predictions_path = Path(cfg["passt_val_predictions_path"])
         predictions_path.parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(predictions_path, targets=y_true, scores=scores)
-        print(f"Saved PaSST validation predictions to {predictions_path}")
+        print_progress(f"Saved PaSST validation predictions to {predictions_path}")
 
     soundscape_train_rows = train_rows[train_rows["source"] == "soundscape"]
     group_summary = validation_group_summary(
@@ -524,34 +526,35 @@ def main():
     )
     print_validation_group_summary(group_summary)
 
-    print()
-    print("Experiment summary")
-    print(f"experiment name: {cfg['experiment_name']}")
-    print(f"seed: {cfg['seed']}")
-    print(f"loss: {cfg['loss']}")
-    print(f"sampling: {cfg['sampling']}")
-    print(f"head_lr: {cfg['head_lr']}")
-    print(f"dropout: {cfg['dropout']}")
-    print(f"focal_gamma: {cfg['focal_gamma']}")
-    print(f"focal_alpha: {cfg['focal_alpha']}")
-    print(f"passt_cache_focal_crops_per_recording: {cfg['passt_cache_focal_crops_per_recording']}")
-    print(f"passt_train_cache_path: {cfg['passt_train_cache_path']}")
-    print(f"passt_val_cache_path: {cfg['passt_val_cache_path']}")
-    print(f"train_enabled: {cfg['train_enabled']}")
-    print(f"passt_load_model_weights_path: {cfg['passt_load_model_weights_path']}")
-    print(f"passt_save_model_weights_path: {cfg['passt_save_model_weights_path']}")
-    print(f"passt_save_best_model: {cfg['passt_save_best_model']}")
-    print(f"passt_best_model_weights_path: {cfg['passt_best_model_weights_path']}")
+    print(flush=True)
+    print_progress("Experiment summary")
+    print(f"experiment name: {cfg['experiment_name']}", flush=True)
+    print(f"seed: {cfg['seed']}", flush=True)
+    print(f"loss: {cfg['loss']}", flush=True)
+    print(f"sampling: {cfg['sampling']}", flush=True)
+    print(f"head_lr: {cfg['head_lr']}", flush=True)
+    print(f"dropout: {cfg['dropout']}", flush=True)
+    print(f"focal_gamma: {cfg['focal_gamma']}", flush=True)
+    print(f"focal_alpha: {cfg['focal_alpha']}", flush=True)
+    print(f"passt_input_seconds: {cfg['passt_input_seconds']}", flush=True)
+    print(f"passt_cache_focal_crops_per_recording: {cfg['passt_cache_focal_crops_per_recording']}", flush=True)
+    print(f"passt_train_cache_path: {cfg['passt_train_cache_path']}", flush=True)
+    print(f"passt_val_cache_path: {cfg['passt_val_cache_path']}", flush=True)
+    print(f"train_enabled: {cfg['train_enabled']}", flush=True)
+    print(f"passt_load_model_weights_path: {cfg['passt_load_model_weights_path']}", flush=True)
+    print(f"passt_save_model_weights_path: {cfg['passt_save_model_weights_path']}", flush=True)
+    print(f"passt_save_best_model: {cfg['passt_save_best_model']}", flush=True)
+    print(f"passt_best_model_weights_path: {cfg['passt_best_model_weights_path']}", flush=True)
     if best_epoch is None:
-        print("best epoch: n/a")
-        print("best val_challenge_score: n/a")
+        print("best epoch: n/a", flush=True)
+        print("best val_challenge_score: n/a", flush=True)
     else:
-        print(f"best epoch: head epoch {best_epoch}")
-        print(f"best val_challenge_score: {best_score:.5f}")
-    print(f"final val_challenge_score: {score:.5f}")
-    print(f"training time: {format_duration(training_seconds)}")
-    print(f"notes: {cfg['notes']}")
-    print(f"Total run time: {format_duration(perf_counter() - run_start)}")
+        print(f"best epoch: head epoch {best_epoch}", flush=True)
+        print(f"best val_challenge_score: {best_score:.5f}", flush=True)
+    print(f"final val_challenge_score: {score:.5f}", flush=True)
+    print(f"training time: {format_duration(training_seconds)}", flush=True)
+    print(f"notes: {cfg['notes']}", flush=True)
+    print_progress(f"Total run time: {format_duration(perf_counter() - run_start)}")
 
 
 if __name__ == "__main__":

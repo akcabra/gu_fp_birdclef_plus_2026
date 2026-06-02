@@ -6,6 +6,7 @@ import numpy as np
 
 from src.audio import load_clip_np
 from src.passt.extractor import PaSSTExtractor
+from src.passt.progress import print_progress
 
 
 def _batched_rows(rows, batch_size: int):
@@ -54,6 +55,9 @@ def write_passt_cache(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     extractor = PaSSTExtractor(device=device, arch=arch, include_logits=include_logits)
+    total_rows = len(rows)
+    total_batches = int(np.ceil(total_rows / batch_size))
+    print_progress(f"PaSST cache extraction started: rows={total_rows}, batches={total_batches}, path={path}")
 
     embeddings = []
     logits = []
@@ -61,7 +65,10 @@ def write_passt_cache(
     row_indices = []
     source_row_indices = []
 
-    for batch_waveforms, batch_targets, batch_row_indices, batch_source_row_indices in _batched_rows(rows, batch_size):
+    for batch_idx, (batch_waveforms, batch_targets, batch_row_indices, batch_source_row_indices) in enumerate(
+        _batched_rows(rows, batch_size),
+        start=1,
+    ):
         waveforms = np.stack(batch_waveforms).astype(np.float32)
         if waveforms.shape[1] < input_samples:
             waveforms = np.pad(waveforms, ((0, 0), (0, input_samples - waveforms.shape[1])))
@@ -74,7 +81,10 @@ def write_passt_cache(
         targets.append(np.stack(batch_targets).astype(np.float32))
         row_indices.extend(batch_row_indices)
         source_row_indices.extend(batch_source_row_indices)
+        if batch_idx == 1 or batch_idx % 100 == 0 or batch_idx == total_batches:
+            print_progress(f"PaSST cache extraction progress: batch {batch_idx}/{total_batches}")
 
+    print_progress(f"Writing PaSST cache arrays to {path}")
     arrays = {
         "embeddings": np.concatenate(embeddings, axis=0).astype(np.float32),
         "targets": np.concatenate(targets, axis=0).astype(np.float32),
@@ -86,6 +96,7 @@ def write_passt_cache(
     if source_row_indices:
         arrays["source_row_indices"] = np.asarray(source_row_indices, dtype=np.int32)
     np.savez_compressed(path, **arrays)
+    print_progress(f"Finished PaSST cache: {path}")
 
 
 def load_passt_cache(path: str | Path):

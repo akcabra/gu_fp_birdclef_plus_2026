@@ -71,6 +71,7 @@ def main() -> None:
 
     train_cache_rows = expand_focal_rows(train_rows, cfg["passt_cache_focal_crops_per_recording"])
     val_cache_rows = make_passt_val_rows(val_rows, validation_crop_offsets(cfg))
+    input_samples = int(32000 * cfg["passt_input_seconds"])
 
     print(f"Writing PaSST train embedding cache to {cfg['passt_train_cache_path']}")
     write_passt_cache(
@@ -80,7 +81,7 @@ def main() -> None:
         device=cfg["passt_device"],
         arch=cfg["passt_arch"],
         include_logits=cfg["passt_cache_include_logits"],
-        input_samples=int(32000 * cfg["passt_input_seconds"]),
+        input_samples=input_samples,
     )
 
     print(f"Writing PaSST validation embedding cache to {cfg['passt_val_cache_path']}")
@@ -91,7 +92,7 @@ def main() -> None:
         device=cfg["passt_device"],
         arch=cfg["passt_arch"],
         include_logits=cfg["passt_cache_include_logits"],
-        input_samples=int(32000 * cfg["passt_input_seconds"]),
+        input_samples=input_samples,
     )
     print(f"Finished writing PaSST caches in {format_duration(perf_counter() - start)}")
 
