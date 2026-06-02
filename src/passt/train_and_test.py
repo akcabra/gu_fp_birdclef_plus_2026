@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from pprint import pformat
 from time import perf_counter
+import contextlib
+import io
 import random
 import sys
 
@@ -11,10 +13,12 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.audio import load_clip_np
 from src.config import load_config
 from src.data import attach_targets, build_label_space, load_tables, make_mixed_split, positive_class_weights, save_split
 from src.metrics import challenge_score_from_arrays, per_class_auc, sigmoid
@@ -60,6 +64,111 @@ class PaSSTHead(nn.Module):
         return self.net(x)
 
 
+class PaSSTWaveformDataset(Dataset):
+    def __init__(self, rows, training: bool, row_indices: np.ndarray | None = None) -> None:
+        self.paths = rows["audio_path"].astype(str).to_numpy()
+        self.sources = rows["source"].astype(str).to_numpy()
+        self.starts = rows["start_seconds"].fillna(-1).astype(np.float32).to_numpy()
+        self.targets = np.stack(rows["target"].to_numpy()).astype(np.float32)
+        self.training = training
+        self.row_indices = row_indices
+
+    def __len__(self) -> int:
+        return len(self.targets)
+
+    def __getitem__(self, index: int):
+        waveform = load_clip_np(
+            self.paths[index],
+            self.sources[index],
+            float(self.starts[index]),
+            self.training,
+        )
+        target = self.targets[index]
+        if self.row_indices is None:
+            return waveform, target
+        return waveform, target, np.int32(self.row_indices[index])
+
+
+class OnlinePaSSTClassifier(nn.Module):
+    def __init__(self, cfg: dict, device: torch.device, num_classes: int = 234) -> None:
+        super().__init__()
+        from hear21passt import base as passt_base
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            if cfg["passt_arch"]:
+                self.passt = passt_base.get_basic_model(arch=cfg["passt_arch"])
+            else:
+                self.passt = passt_base.load_model()
+        self.passt.to(device)
+        self.feature_mode = cfg["passt_feature_mode"]
+        self.embedding_dim = self._embedding_dim()
+        self.head = self._make_head(self.embedding_dim, cfg["hidden_dim"], cfg["dropout"], cfg["head_type"], num_classes)
+        self._configure_trainable_backbone(cfg)
+
+    def _embedding_dim(self) -> int:
+        if self.feature_mode == "all":
+            return 1295
+        if self.feature_mode == "features":
+            return 768
+        if self.feature_mode == "logits":
+            return 527
+        raise ValueError(f"Unknown passt_feature_mode: {self.feature_mode}")
+
+    @staticmethod
+    def _make_head(embedding_dim: int, hidden_dim: int, dropout: float, head_type: str, num_classes: int) -> nn.Module:
+        if head_type == "mlp":
+            return nn.Sequential(
+                nn.Dropout(dropout),
+                nn.Linear(embedding_dim, hidden_dim),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, num_classes),
+            )
+        if head_type == "linear":
+            return nn.Sequential(
+                nn.Dropout(dropout),
+                nn.Linear(embedding_dim, num_classes),
+            )
+        raise ValueError(f"Unknown head_type: {head_type}")
+
+    def _configure_trainable_backbone(self, cfg: dict) -> None:
+        for parameter in self.passt.parameters():
+            parameter.requires_grad = False
+
+        if not cfg["passt_train_backbone"]:
+            return
+
+        last_n_blocks = int(cfg["passt_unfreeze_last_n_blocks"])
+        if last_n_blocks > 0:
+            blocks = list(self.passt.net.blocks)
+            for block in blocks[-last_n_blocks:]:
+                for parameter in block.parameters():
+                    parameter.requires_grad = True
+            for parameter in self.passt.net.norm.parameters():
+                parameter.requires_grad = True
+        else:
+            for parameter in self.passt.parameters():
+                parameter.requires_grad = True
+
+    def features_from_specs(self, specs: torch.Tensor) -> torch.Tensor:
+        self.passt.net.patch_embed.img_size = (int(specs.shape[1]), int(specs.shape[2]))
+        logits, features = self.passt.net(specs.unsqueeze(1))
+        if self.feature_mode == "all":
+            return torch.cat([logits, features], dim=1)
+        if self.feature_mode == "features":
+            return features
+        if self.feature_mode == "logits":
+            return logits
+        raise ValueError(f"Unknown passt_feature_mode: {self.feature_mode}")
+
+    def forward_from_specs(self, specs: torch.Tensor) -> torch.Tensor:
+        return self.head(self.features_from_specs(specs))
+
+    def forward(self, waveforms: torch.Tensor) -> torch.Tensor:
+        specs = self.passt.mel(waveforms)
+        return self.forward_from_specs(specs)
+
+
 def print_run_header(cfg: dict) -> None:
     print_progress("Run configuration")
     print(pformat(cfg, sort_dicts=True), flush=True)
@@ -103,6 +212,16 @@ def make_passt_val_rows(val_rows, offsets: list[float]):
             item["row_index"] = row_idx
             expanded.append(item)
     return pd.DataFrame(expanded)
+
+
+def make_passt_val_rows_with_indices(val_rows, offsets: list[float]) -> tuple[pd.DataFrame, np.ndarray | None]:
+    if len(offsets) == 1:
+        return val_rows.reset_index(drop=True).copy(), None
+
+    rows = make_passt_val_rows(val_rows, offsets)
+    row_indices = rows["row_index"].to_numpy(dtype=np.int32)
+    rows = rows.drop(columns=["row_index"])
+    return rows, row_indices
 
 
 def labels_in_rows(rows) -> set[str]:
@@ -266,6 +385,34 @@ def iter_train_batches(
         yield embeddings[batch_indices], targets[batch_indices]
 
 
+def apply_mixup(specs: torch.Tensor, targets: torch.Tensor, alpha: float) -> tuple[torch.Tensor, torch.Tensor]:
+    if alpha <= 0:
+        return specs, targets
+    lam = np.random.beta(alpha, alpha)
+    indices = torch.randperm(specs.shape[0], device=specs.device)
+    mixed_specs = lam * specs + (1.0 - lam) * specs[indices]
+    mixed_targets = lam * targets + (1.0 - lam) * targets[indices]
+    return mixed_specs, mixed_targets
+
+
+def apply_specaugment(specs: torch.Tensor, time_mask: int, freq_mask: int) -> torch.Tensor:
+    if time_mask <= 0 and freq_mask <= 0:
+        return specs
+    specs = specs.clone()
+    batch_size, n_mels, n_frames = specs.shape
+    if freq_mask > 0 and n_mels > 1:
+        width = min(freq_mask, n_mels)
+        starts = torch.randint(0, n_mels - width + 1, (batch_size,), device=specs.device)
+        for batch_idx, start in enumerate(starts):
+            specs[batch_idx, start : start + width, :] = 0
+    if time_mask > 0 and n_frames > 1:
+        width = min(time_mask, n_frames)
+        starts = torch.randint(0, n_frames - width + 1, (batch_size,), device=specs.device)
+        for batch_idx, start in enumerate(starts):
+            specs[batch_idx, :, start : start + width] = 0
+    return specs
+
+
 def torch_loss(logits, targets, cfg: dict, pos_weights):
     if cfg["loss"] == "bce":
         return F.binary_cross_entropy_with_logits(logits, targets)
@@ -295,6 +442,28 @@ def predict_arrays(model, embeddings: np.ndarray, targets: np.ndarray, batch_siz
             logits.append(model(x).cpu().numpy())
     scores = sigmoid(np.concatenate(logits, axis=0))
     return targets.astype(np.float32), scores.astype(np.float32)
+
+
+def predict_online(model, loader: DataLoader, device: torch.device):
+    model.eval()
+    targets = []
+    logits = []
+    row_indices = []
+    with torch.no_grad():
+        for batch in loader:
+            if len(batch) == 3:
+                x, y, rows = batch
+                row_indices.append(rows.numpy())
+            else:
+                x, y = batch
+            x = x.to(device)
+            logits.append(model(x).cpu().numpy())
+            targets.append(y.numpy())
+    scores = sigmoid(np.concatenate(logits, axis=0))
+    y_true = np.concatenate(targets, axis=0).astype(np.float32)
+    if row_indices:
+        return y_true, scores.astype(np.float32), np.concatenate(row_indices, axis=0)
+    return y_true, scores.astype(np.float32), None
 
 
 def save_checkpoint(path: str | Path, model, cfg: dict, embedding_dim: int) -> None:
@@ -355,6 +524,202 @@ def make_passt_caches_if_needed(cfg: dict, train_rows, val_rows):
     )
 
 
+def make_online_optimizer(model: OnlinePaSSTClassifier, cfg: dict):
+    head_params = [param for param in model.head.parameters() if param.requires_grad]
+    backbone_params = [
+        param
+        for name, param in model.named_parameters()
+        if not name.startswith("head.") and param.requires_grad
+    ]
+    groups = [{"params": head_params, "lr": cfg["head_lr"]}]
+    if backbone_params:
+        groups.append({"params": backbone_params, "lr": cfg["passt_backbone_lr"]})
+    return torch.optim.Adam(groups)
+
+
+def run_online_training(
+    cfg: dict,
+    train_rows,
+    val_rows,
+    label_space,
+    taxonomy,
+    perch_mapping,
+    sample_weights: pd.Series,
+    pos_weights_np,
+    device: torch.device,
+    run_start: float,
+) -> None:
+    offsets = validation_crop_offsets(cfg)
+    val_eval_rows, val_row_indices = make_passt_val_rows_with_indices(val_rows, offsets)
+    if val_row_indices is not None:
+        print_progress("Validation crops")
+        print(f"offsets_seconds: {offsets}", flush=True)
+        print(flush=True)
+
+    train_dataset = PaSSTWaveformDataset(train_rows.reset_index(drop=True), training=True)
+    val_dataset = PaSSTWaveformDataset(val_eval_rows.reset_index(drop=True), training=False, row_indices=val_row_indices)
+    sampler = None
+    shuffle = True
+    if cfg["sampling"] == "weighted":
+        sampler = WeightedRandomSampler(
+            weights=torch.as_tensor(sample_weights.to_numpy(dtype=np.float64)),
+            num_samples=len(train_dataset),
+            replacement=True,
+        )
+        shuffle = False
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=cfg["batch_size"],
+        shuffle=shuffle,
+        sampler=sampler,
+        num_workers=cfg["passt_num_workers"],
+        pin_memory=device.type == "cuda",
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=cfg["passt_batch_size"],
+        shuffle=False,
+        num_workers=cfg["passt_num_workers"],
+        pin_memory=device.type == "cuda",
+    )
+
+    model = OnlinePaSSTClassifier(cfg, device).to(device)
+    print_progress("Model")
+    print(model, flush=True)
+    trainable_backbone = sum(
+        int(param.numel()) for name, param in model.named_parameters() if not name.startswith("head.") and param.requires_grad
+    )
+    trainable_head = sum(int(param.numel()) for param in model.head.parameters() if param.requires_grad)
+    print(f"trainable head params: {trainable_head}", flush=True)
+    print(f"trainable PaSST backbone params: {trainable_backbone}", flush=True)
+    print(flush=True)
+
+    if cfg["passt_load_model_weights_path"]:
+        load_checkpoint(cfg["passt_load_model_weights_path"], model, device)
+        print_progress(f"Loaded PaSST model weights from {cfg['passt_load_model_weights_path']}")
+        print(flush=True)
+
+    pos_weights = None if pos_weights_np is None else torch.from_numpy(pos_weights_np).to(device)
+    optimizer = make_online_optimizer(model, cfg)
+    best_score = -np.inf
+    best_epoch = None
+
+    train_start = perf_counter()
+    if cfg["train_enabled"]:
+        print_progress("Starting online PaSST training")
+        for epoch in range(cfg["epochs_head"]):
+            epoch_start = perf_counter()
+            model.train()
+            model.passt.mel.eval()
+            losses = []
+            for x, y in train_loader:
+                x = x.to(device)
+                y = y.to(device)
+                optimizer.zero_grad(set_to_none=True)
+                specs = model.passt.mel(x)
+                if cfg["passt_mixup_enabled"]:
+                    specs, y = apply_mixup(specs, y, cfg["passt_mixup_alpha"])
+                if cfg["passt_specaugment_enabled"]:
+                    specs = apply_specaugment(
+                        specs,
+                        cfg["passt_specaugment_time_mask"],
+                        cfg["passt_specaugment_freq_mask"],
+                    )
+                logits = model.forward_from_specs(specs)
+                loss = torch_loss(logits, y, cfg, pos_weights)
+                loss.backward()
+                optimizer.step()
+                losses.append(float(loss.detach().cpu()))
+
+            crop_true, crop_scores, eval_row_indices = predict_online(model, val_loader, device)
+            if eval_row_indices is None:
+                y_true, scores = crop_true, crop_scores
+            else:
+                scores = aggregate_crop_scores(
+                    crop_scores,
+                    eval_row_indices,
+                    len(val_rows),
+                    cfg["validation_crop_aggregation"],
+                    cfg["validation_top_k"],
+                )
+                y_true = np.zeros((len(val_rows), crop_true.shape[1]), dtype=np.float32)
+                for row_idx in range(len(val_rows)):
+                    y_true[row_idx] = crop_true[np.flatnonzero(eval_row_indices == row_idx)[0]]
+            score = challenge_score_from_arrays(y_true, scores, label_space.labels)
+            print_progress(f"Epoch {epoch + 1}/{cfg['epochs_head']}")
+            print(f" - epoch_time: {format_duration(perf_counter() - epoch_start)}", flush=True)
+            print(f" - loss: {np.mean(losses):.6f}", flush=True)
+            print(f" - val_challenge_score: {score:.5f}", flush=True)
+            if score > best_score:
+                best_score = score
+                best_epoch = epoch + 1
+                if cfg["passt_save_best_model"]:
+                    save_checkpoint(cfg["passt_best_model_weights_path"], model, cfg, model.embedding_dim)
+        if cfg["restore_best_model"] and cfg["passt_save_best_model"] and cfg["passt_best_model_weights_path"]:
+            load_checkpoint(cfg["passt_best_model_weights_path"], model, device)
+            print_progress(f"Loaded best PaSST model weights from {cfg['passt_best_model_weights_path']}")
+    else:
+        print_progress("Skipping training because train_enabled is false")
+    training_seconds = perf_counter() - train_start
+
+    if cfg["passt_save_model_weights_path"] and (cfg["train_enabled"] or cfg["passt_load_model_weights_path"]):
+        save_checkpoint(cfg["passt_save_model_weights_path"], model, cfg, model.embedding_dim)
+        print_progress(f"Saved PaSST model weights to {cfg['passt_save_model_weights_path']}")
+
+    print_progress(f"Total training time: {format_duration(training_seconds)}")
+    eval_start = perf_counter()
+    crop_true, crop_scores, eval_row_indices = predict_online(model, val_loader, device)
+    if eval_row_indices is None:
+        y_true, scores = crop_true, crop_scores
+    else:
+        scores = aggregate_crop_scores(
+            crop_scores,
+            eval_row_indices,
+            len(val_rows),
+            cfg["validation_crop_aggregation"],
+            cfg["validation_top_k"],
+        )
+        y_true = np.zeros((len(val_rows), crop_true.shape[1]), dtype=np.float32)
+        for row_idx in range(len(val_rows)):
+            y_true[row_idx] = crop_true[np.flatnonzero(eval_row_indices == row_idx)[0]]
+    score = challenge_score_from_arrays(y_true, scores, label_space.labels)
+    print_progress(f"Evaluation time: {format_duration(perf_counter() - eval_start)}")
+    print(f"validation challenge score: {score:.5f}", flush=True)
+
+    if cfg["passt_val_predictions_path"]:
+        predictions_path = Path(cfg["passt_val_predictions_path"])
+        predictions_path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(predictions_path, targets=y_true, scores=scores)
+        print_progress(f"Saved PaSST validation predictions to {predictions_path}")
+
+    soundscape_train_rows = train_rows[train_rows["source"] == "soundscape"]
+    print_validation_group_summary(
+        validation_group_summary(y_true, scores, label_space.labels, taxonomy, perch_mapping, train_rows, soundscape_train_rows)
+    )
+
+    print(flush=True)
+    print_progress("Experiment summary")
+    print(f"experiment name: {cfg['experiment_name']}", flush=True)
+    print(f"seed: {cfg['seed']}", flush=True)
+    print(f"loss: {cfg['loss']}", flush=True)
+    print(f"sampling: {cfg['sampling']}", flush=True)
+    print(f"passt_training_mode: {cfg['passt_training_mode']}", flush=True)
+    print(f"passt_train_backbone: {cfg['passt_train_backbone']}", flush=True)
+    print(f"passt_unfreeze_last_n_blocks: {cfg['passt_unfreeze_last_n_blocks']}", flush=True)
+    print(f"passt_mixup_enabled: {cfg['passt_mixup_enabled']}", flush=True)
+    print(f"passt_specaugment_enabled: {cfg['passt_specaugment_enabled']}", flush=True)
+    if best_epoch is None:
+        print("best epoch: n/a", flush=True)
+        print("best val_challenge_score: n/a", flush=True)
+    else:
+        print(f"best epoch: head epoch {best_epoch}", flush=True)
+        print(f"best val_challenge_score: {best_score:.5f}", flush=True)
+    print(f"final val_challenge_score: {score:.5f}", flush=True)
+    print(f"training time: {format_duration(training_seconds)}", flush=True)
+    print(f"notes: {cfg['notes']}", flush=True)
+    print_progress(f"Total run time: {format_duration(perf_counter() - run_start)}")
+
+
 def main():
     run_start = perf_counter()
     cfg = load_config(PROJECT_ROOT / "config.yaml")
@@ -376,6 +741,39 @@ def main():
     save_split(train_rows, val_rows, PROJECT_ROOT / "data" / "splits")
 
     perch_mapping = pd.read_csv(cfg["perch_label_mapping_path"])
+    sample_weights = row_sampling_weights(cfg, train_rows.reset_index(drop=True), label_space.labels, taxonomy, perch_mapping)
+    if cfg["sampling"] == "weighted":
+        print_sampling_summary(sample_weights)
+        sample_weight_array = sample_weights.to_numpy(dtype=np.float64)
+    else:
+        sample_weight_array = None
+    pos_weight_rows = (
+        expand_focal_rows(train_rows, cfg["passt_cache_focal_crops_per_recording"])
+        if cfg["passt_training_mode"] == "cache"
+        else train_rows
+    )
+    pos_weights_np = make_loss_weights(cfg, pos_weight_rows)
+    device = torch.device(cfg["passt_device"] if cfg["passt_device"] != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
+    print_progress(f"PyTorch device: {device}")
+    print(flush=True)
+
+    if cfg["passt_training_mode"] == "online":
+        run_online_training(
+            cfg,
+            train_rows,
+            val_rows,
+            label_space,
+            taxonomy,
+            perch_mapping,
+            sample_weights,
+            pos_weights_np,
+            device,
+            run_start,
+        )
+        return
+    if cfg["passt_training_mode"] != "cache":
+        raise ValueError(f"Unknown passt_training_mode: {cfg['passt_training_mode']}")
+
     make_passt_caches_if_needed(cfg, train_rows, val_rows)
 
     train_cache = load_passt_cache(cfg["passt_train_cache_path"])
@@ -397,18 +795,6 @@ def main():
     print(f"training examples: {len(train_targets)}", flush=True)
     print(f"validation examples: {len(val_targets)}", flush=True)
     print(f"embedding dim: {embedding_dim}", flush=True)
-    print(flush=True)
-
-    sample_weights = row_sampling_weights(cfg, train_rows.reset_index(drop=True), label_space.labels, taxonomy, perch_mapping)
-    if cfg["sampling"] == "weighted":
-        print_sampling_summary(sample_weights)
-        sample_weight_array = sample_weights.to_numpy(dtype=np.float64)
-    else:
-        sample_weight_array = None
-
-    pos_weights_np = make_loss_weights(cfg, expand_focal_rows(train_rows, cfg["passt_cache_focal_crops_per_recording"]))
-    device = torch.device(cfg["passt_device"] if cfg["passt_device"] != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
-    print_progress(f"PyTorch device: {device}")
     print(flush=True)
 
     model = PaSSTHead(embedding_dim, cfg["hidden_dim"], cfg["dropout"], cfg["head_type"]).to(device)
