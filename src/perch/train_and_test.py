@@ -1,6 +1,7 @@
 from pathlib import Path
 from pprint import pformat
 from time import perf_counter
+import argparse
 import sys
 
 import pandas as pd
@@ -350,9 +351,15 @@ def print_experiment_summary(
     print(f"notes: {cfg['notes']}")
 
 
-def main():
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default=str(PROJECT_ROOT / "config.yaml"), help="Path to a YAML config file")
+    return parser.parse_args()
+
+
+def main(config_path: str | Path = PROJECT_ROOT / "config.yaml"):
     run_start = perf_counter()
-    cfg = load_config(PROJECT_ROOT / "config.yaml")
+    cfg = load_config(config_path)
     print_run_header(cfg)
     set_seed(cfg["seed"])
 
@@ -476,4 +483,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main(args.config)

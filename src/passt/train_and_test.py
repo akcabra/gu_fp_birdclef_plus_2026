@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from pprint import pformat
 from time import perf_counter
+import argparse
 import contextlib
 import io
 import random
@@ -795,9 +796,15 @@ def run_online_training(
     print_progress(f"Total run time: {format_duration(perf_counter() - run_start)}")
 
 
-def main():
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default=str(PROJECT_ROOT / "config.yaml"), help="Path to a YAML config file")
+    return parser.parse_args()
+
+
+def main(config_path: str | Path = PROJECT_ROOT / "config.yaml"):
     run_start = perf_counter()
-    cfg = load_config(PROJECT_ROOT / "config.yaml")
+    cfg = load_config(config_path)
     print_run_header(cfg)
     set_seed(cfg["seed"])
 
@@ -1038,4 +1045,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main(args.config)

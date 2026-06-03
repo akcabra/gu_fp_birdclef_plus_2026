@@ -33,6 +33,13 @@ soundscape_cv_folds: 3
 soundscape_eval_split: cv # cv or holdout
 soundscape_fold: 0
 
+# CV runner settings
+cv_model: passt # perch or passt
+cv_folds_to_run: [] # [] means all folds from 0 to soundscape_cv_folds - 1
+cv_cache_name: "" # empty means use experiment_name; set explicitly to share compatible caches
+cv_dry_run: false
+cv_python: "" # empty means use the current Python executable
+
 perch_blend_enabled: false
 perch_blend_alpha: 0.8
 perch_label_mapping_path: data/metadata/birdclef_to_perch_label_mapping.csv
