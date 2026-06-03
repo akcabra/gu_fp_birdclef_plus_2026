@@ -35,6 +35,7 @@ def load_config(path: str | Path = "config.yaml") -> dict[str, Any]:
         "perch_val_predictions_path",
         "passt_val_predictions_path",
         "ensemble_val_predictions_path",
+        "ensemble_classwise_alphas_path",
     ]:
         if key in cfg and cfg[key]:
             cfg[key] = str(_resolve_project_path(cfg[key]))

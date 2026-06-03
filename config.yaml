@@ -59,11 +59,16 @@ passt_load_model_weights_path: ""
 passt_save_best_model: true
 passt_best_model_weights_path: outputs/checkpoints/passt_focal_mixup_unfreeze_2_focal.pt
 passt_save_model_weights_path: outputs/checkpoints/passt_focal_mixup_unfreeze_2_focal_latest.pt
-passt_val_predictions_path: outputs/predictions/passt_val_predictions_focal_mixup_unfreeze_2_focal.npz
+passt_val_predictions_path: outputs/predictions/passt_val_predictions_focal_mixup_unfreeze_1_focal.npz
 
 # Prediction-level validation blending. Generate Perch and PaSST validation
 # prediction npz files, then run: python -m src.ensemble_predictions
 ensemble_val_predictions_path: outputs/predictions/ensemble_val_predictions.npz
+ensemble_blend_mode: classwise # global or classwise
+ensemble_alpha_step: 0.05
+ensemble_classwise_shrinkage: 0.5
+ensemble_classwise_min_positives: 3
+ensemble_classwise_alphas_path: outputs/predictions/ensemble_classwise_alphas.csv
 
 train_enabled: train
 load_model_weights_path: "" # "outputs/checkpoints/best_25_2.weights.h5"
@@ -71,7 +76,7 @@ save_best_model: true
 restore_best_model: true
 best_model_weights_path: outputs/checkpoints/perch_best_0306_3_crop_bce.weights.h5
 save_model_weights_path: outputs/checkpoints/perch_latest_0306_3_crop_bce.weights.h5
-perch_val_predictions_path: outputs/predictions/perch_val_predictions_0306_3_crop.npz
+perch_val_predictions_path: outputs/predictions/perch_val_predictions.npz
 
 soundscape_val_fraction: 0.2
 focal_train_weight: 1.0
