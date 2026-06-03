@@ -143,6 +143,7 @@ def make_datasets(cfg: dict, train_rows, val_rows, labels: list[str], taxonomy, 
             training=True,
             sample_weights=sample_weights.to_numpy(dtype="float64") if cfg["sampling"] == "weighted" else None,
             seed=cfg["seed"],
+            augmentation=cfg["augmentation"],
         )
         if cfg["validation_num_crops"] == 1:
             val_ds = make_tf_dataset(val_rows, batch_size=cfg["batch_size"], training=False)
@@ -161,7 +162,12 @@ def make_datasets(cfg: dict, train_rows, val_rows, labels: list[str], taxonomy, 
         raw_model = build_model(cfg)
         perch_mapper = make_perch_mapper(cfg, labels)
 
-        train_raw_ds = make_tf_dataset(expanded_train_rows, batch_size=cfg["batch_size"], training=True)
+        train_raw_ds = make_tf_dataset(
+            expanded_train_rows,
+            batch_size=cfg["batch_size"],
+            training=True,
+            augmentation=cfg["augmentation"],
+        )
         print(f"Writing train embedding cache to {train_cache_path}")
         write_embedding_cache(
             raw_model,

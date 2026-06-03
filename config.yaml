@@ -13,7 +13,7 @@ weighted_sampling_taxa: ["Insecta", "Reptilia"]
 weighted_sampling_taxa_multiplier: 1.5
 weighted_sampling_max_weight: 5.0
 
-augmentation: random_crop
+augmentation: random_crop # random_crop, energy_biased_crop, center_crop, or none
 focal_train_crops_per_recording: 3
 notes: ""
 validation_num_crops: 1

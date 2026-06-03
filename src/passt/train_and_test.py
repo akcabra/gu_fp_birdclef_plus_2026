@@ -73,13 +73,14 @@ class PaSSTHead(nn.Module):
 
 
 class PaSSTWaveformDataset(Dataset):
-    def __init__(self, rows, training: bool, row_indices: np.ndarray | None = None) -> None:
+    def __init__(self, rows, training: bool, augmentation: str = "random_crop", row_indices: np.ndarray | None = None) -> None:
         self.paths = rows["audio_path"].astype(str).to_numpy()
         self.sources = rows["source"].astype(str).to_numpy()
         self.source_ids = np.asarray([0 if source == "focal" else 1 for source in self.sources], dtype=np.int64)
         self.starts = rows["start_seconds"].fillna(-1).astype(np.float32).to_numpy()
         self.targets = np.stack(rows["target"].to_numpy()).astype(np.float32)
         self.training = training
+        self.augmentation = augmentation
         self.row_indices = row_indices
 
     def __len__(self) -> int:
@@ -91,6 +92,7 @@ class PaSSTWaveformDataset(Dataset):
             self.sources[index],
             float(self.starts[index]),
             self.training,
+            self.augmentation,
         )
         target = self.targets[index]
         source_id = self.source_ids[index]
@@ -555,6 +557,8 @@ def make_passt_caches_if_needed(cfg: dict, train_rows, val_rows):
         return
 
     cache_train_rows = expand_focal_rows(train_rows, cfg["passt_cache_focal_crops_per_recording"])
+    cache_train_rows = cache_train_rows.copy()
+    cache_train_rows["augmentation"] = cfg["augmentation"]
     val_cache_rows = make_passt_val_rows(val_rows, offsets)
     if len(offsets) > 1:
         print_progress("Validation crops")
@@ -615,7 +619,7 @@ def run_online_training(
         print(f"offsets_seconds: {offsets}", flush=True)
         print(flush=True)
 
-    train_dataset = PaSSTWaveformDataset(train_rows.reset_index(drop=True), training=True)
+    train_dataset = PaSSTWaveformDataset(train_rows.reset_index(drop=True), training=True, augmentation=cfg["augmentation"])
     val_dataset = PaSSTWaveformDataset(val_eval_rows.reset_index(drop=True), training=False, row_indices=val_row_indices)
     sampler = None
     shuffle = True

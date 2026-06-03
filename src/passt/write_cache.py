@@ -70,6 +70,8 @@ def main() -> None:
     val_rows = attach_targets(val_rows, label_space)
 
     train_cache_rows = expand_focal_rows(train_rows, cfg["passt_cache_focal_crops_per_recording"])
+    train_cache_rows = train_cache_rows.copy()
+    train_cache_rows["augmentation"] = cfg["augmentation"]
     val_cache_rows = make_passt_val_rows(val_rows, validation_crop_offsets(cfg))
     input_samples = int(32000 * cfg["passt_input_seconds"])
 

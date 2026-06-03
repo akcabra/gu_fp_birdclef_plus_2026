@@ -24,6 +24,7 @@ def _batched_rows(rows, batch_size: int):
                 str(row.source),
                 float(row.start_seconds) if not np.isnan(row.start_seconds) else -1.0,
                 training=str(row.source) == "focal",
+                augmentation=str(row.augmentation) if hasattr(row, "augmentation") else "random_crop",
             )
         )
         batch_targets.append(row.target)
