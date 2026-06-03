@@ -50,10 +50,6 @@ def cv_model(cfg: dict) -> str:
     return model
 
 
-def cv_python(cfg: dict) -> str:
-    return str(cfg.get("cv_python") or sys.executable)
-
-
 def apply_fold_paths(cfg: dict, model: str, experiment_name: str, cache_name: str, fold: int) -> dict:
     cfg = dict(cfg)
     fold_name = f"{experiment_name}_fold{fold}"
@@ -145,8 +141,6 @@ def main() -> None:
     experiment_name = str(base_cfg["experiment_name"])
     cache_name = str(base_cfg.get("cv_cache_name") or experiment_name)
     folds = fold_list(base_cfg)
-    dry_run = bool(base_cfg.get("cv_dry_run", False))
-    python_executable = cv_python(base_cfg)
 
     config_dir = PROJECT_ROOT / "outputs" / "cv_configs" / experiment_name
     log_dir = PROJECT_ROOT / "outputs" / "cv_logs" / experiment_name
@@ -158,33 +152,29 @@ def main() -> None:
         config_path = config_dir / f"{model}_fold{fold}.yaml"
         log_path = log_dir / f"{model}_fold{fold}.log"
         write_config(fold_cfg, config_path)
-        command = command_for(model, python_executable, config_path)
+        command = command_for(model, sys.executable, config_path)
         print(f"Fold {fold}: {' '.join(command)}")
 
         start = perf_counter()
         return_code = 0
-        output = ""
-        if dry_run:
-            output = "dry run\n"
-        else:
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            lines = []
-            with log_path.open("w", encoding="utf-8") as log_file:
-                process = subprocess.Popen(
-                    command,
-                    cwd=PROJECT_ROOT,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                )
-                assert process.stdout is not None
-                for line in process.stdout:
-                    print(line, end="")
-                    log_file.write(line)
-                    log_file.flush()
-                    lines.append(line)
-                return_code = process.wait()
-            output = "".join(lines)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        lines = []
+        with log_path.open("w", encoding="utf-8") as log_file:
+            process = subprocess.Popen(
+                command,
+                cwd=PROJECT_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            assert process.stdout is not None
+            for line in process.stdout:
+                print(line, end="")
+                log_file.write(line)
+                log_file.flush()
+                lines.append(line)
+            return_code = process.wait()
+        output = "".join(lines)
 
         duration = perf_counter() - start
         final_score, best_score = extract_scores(output)

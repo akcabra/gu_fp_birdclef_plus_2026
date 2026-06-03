@@ -3,7 +3,7 @@ perch_model_path: models/perch_v2
 perch_cpu_model_path: models/perch_v2_cpu
 
 seed: 42
-experiment_name: passt_focal_mixup_unfreeze_2_focal
+experiment_name: perch_baseline
 # experiment_name: perch_bce_0306_3_crop
 sampling: standard # standard or weighted
 weighted_sampling_rare_threshold: 10
@@ -34,11 +34,9 @@ soundscape_eval_split: cv # cv or holdout
 soundscape_fold: 0
 
 # CV runner settings
-cv_model: passt # perch or passt
+cv_model: perch # perch or passt
 cv_folds_to_run: [] # [] means all folds from 0 to soundscape_cv_folds - 1
 cv_cache_name: "" # empty means use experiment_name; set explicitly to share compatible caches
-cv_dry_run: false
-cv_python: "" # empty means use the current Python executable
 
 perch_blend_enabled: false
 perch_blend_alpha: 0.8
@@ -93,9 +91,9 @@ train_enabled: train
 load_model_weights_path: "" # "outputs/checkpoints/best_25_2.weights.h5"
 save_best_model: true
 restore_best_model: true
-best_model_weights_path: outputs/checkpoints/perch_best_0306_3_crop_bce.weights.h5
-save_model_weights_path: outputs/checkpoints/perch_latest_0306_3_crop_bce.weights.h5
-perch_val_predictions_path: outputs/predictions/perch_val_predictions.npz
+best_model_weights_path: outputs/checkpoints/perch_baseline.weights.h5
+save_model_weights_path: outputs/checkpoints/perch_baseline.weights.h5
+perch_val_predictions_path: outputs/predictions/perch_val_predictions_baseline.npz
 
 focal_train_weight: 1.0
 soundscape_train_weight: 1.0
