@@ -3,8 +3,8 @@ perch_model_path: models/perch_v2
 perch_cpu_model_path: models/perch_v2_cpu
 
 seed: 42
-# experiment_name: passt_focal_mixup_unfreeze_1_focal
-experiment_name: perch_bce
+experiment_name: passt_focal_mixup_unfreeze_2_focal
+# experiment_name: perch_bce_0306_3_crop
 sampling: standard # standard or weighted
 weighted_sampling_rare_threshold: 10
 weighted_sampling_rare_multiplier: 3.0
@@ -14,7 +14,7 @@ weighted_sampling_taxa_multiplier: 1.5
 weighted_sampling_max_weight: 5.0
 
 augmentation: random_crop
-focal_train_crops_per_recording: 1
+focal_train_crops_per_recording: 3
 notes: ""
 validation_num_crops: 1
 validation_crop_stride_seconds: 1.0
@@ -37,10 +37,10 @@ passt_arch: ""
 passt_clip_seconds: 5.0
 passt_input_seconds: 5.0
 passt_batch_size: 32
-passt_num_workers: 2
+passt_num_workers: 4
 passt_feature_mode: all # all, features, or logits
 passt_train_backbone: true
-passt_unfreeze_last_n_blocks: 1
+passt_unfreeze_last_n_blocks: 2
 passt_backbone_lr: 0.000001
 passt_mixup_enabled: true
 passt_mixup_mode: focal_only # batch, same_source, focal_only, or soundscape_only
@@ -57,21 +57,21 @@ passt_train_cache_path: outputs/passt_cache/train_embeddings.npz
 passt_val_cache_path: outputs/passt_cache/val_embeddings.npz
 passt_load_model_weights_path: ""
 passt_save_best_model: true
-passt_best_model_weights_path: outputs/checkpoints/passt_focal_mixup_unfreeze_1_focal.pt
-passt_save_model_weights_path: outputs/checkpoints/passt_focal_mixup_unfreeze_1_focal_latest.pt
-passt_val_predictions_path: outputs/predictions/passt_val_predictions_focal_mixup_unfreeze_1_focal.npz
+passt_best_model_weights_path: outputs/checkpoints/passt_focal_mixup_unfreeze_2_focal.pt
+passt_save_model_weights_path: outputs/checkpoints/passt_focal_mixup_unfreeze_2_focal_latest.pt
+passt_val_predictions_path: outputs/predictions/passt_val_predictions_focal_mixup_unfreeze_2_focal.npz
 
 # Prediction-level validation blending. Generate Perch and PaSST validation
 # prediction npz files, then run: python -m src.ensemble_predictions
-perch_val_predictions_path: outputs/predictions/perch_val_predictions.npz
 ensemble_val_predictions_path: outputs/predictions/ensemble_val_predictions.npz
 
 train_enabled: train
 load_model_weights_path: "" # "outputs/checkpoints/best_25_2.weights.h5"
 save_best_model: true
-best_model_weights_path: outputs/checkpoints/perch_best_0602_bce.weights.h5
-save_model_weights_path: outputs/checkpoints/perch_latest_0602_bce.weights.h5
 restore_best_model: true
+best_model_weights_path: outputs/checkpoints/perch_best_0306_3_crop_bce.weights.h5
+save_model_weights_path: outputs/checkpoints/perch_latest_0306_3_crop_bce.weights.h5
+perch_val_predictions_path: outputs/predictions/perch_val_predictions_0306_3_crop.npz
 
 soundscape_val_fraction: 0.2
 focal_train_weight: 1.0

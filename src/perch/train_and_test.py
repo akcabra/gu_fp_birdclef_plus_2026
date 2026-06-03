@@ -72,6 +72,8 @@ def validation_crop_offsets(cfg: dict) -> list[float]:
 
 
 def expand_focal_rows(rows, crops_per_focal: int):
+    if crops_per_focal < 1:
+        raise ValueError("focal_train_crops_per_recording must be >= 1")
     rows = rows.reset_index(drop=True).copy()
     rows["source_row_index"] = range(len(rows))
     focal_rows = rows[rows["source"] == "focal"]
@@ -122,12 +124,13 @@ def print_sampling_summary(weights: pd.Series) -> None:
 
 def make_datasets(cfg: dict, train_rows, val_rows, labels: list[str], taxonomy, perch_mapping):
     offsets = validation_crop_offsets(cfg)
+    expanded_train_rows = expand_focal_rows(train_rows, cfg["focal_train_crops_per_recording"])
     if not cfg["embedding_cache_enabled"]:
-        sample_weights = row_sampling_weights(cfg, train_rows, labels, taxonomy, perch_mapping)
+        sample_weights = row_sampling_weights(cfg, expanded_train_rows, labels, taxonomy, perch_mapping)
         if cfg["sampling"] == "weighted":
             print_sampling_summary(sample_weights)
         train_ds = make_tf_dataset(
-            train_rows,
+            expanded_train_rows,
             batch_size=cfg["batch_size"],
             training=True,
             sample_weights=sample_weights.to_numpy(dtype="float64") if cfg["sampling"] == "weighted" else None,
@@ -141,9 +144,8 @@ def make_datasets(cfg: dict, train_rows, val_rows, labels: list[str], taxonomy, 
             print("Validation crops")
             print(f"offsets_seconds: {offsets}")
             print()
-        return train_ds, val_ds, val_row_indices, train_rows
+        return train_ds, val_ds, val_row_indices, expanded_train_rows
 
-    cache_train_rows = expand_focal_rows(train_rows, cfg["embedding_cache_focal_crops_per_recording"])
     train_cache_path = Path(cfg["train_embedding_cache_path"])
     val_cache_path = Path(cfg["val_embedding_cache_path"])
 
@@ -151,14 +153,13 @@ def make_datasets(cfg: dict, train_rows, val_rows, labels: list[str], taxonomy, 
         raw_model = build_model(cfg)
         perch_mapper = make_perch_mapper(cfg, labels)
 
-        train_raw_ds = make_tf_dataset(cache_train_rows, batch_size=cfg["batch_size"], training=True)
+        train_raw_ds = make_tf_dataset(expanded_train_rows, batch_size=cfg["batch_size"], training=True)
         print(f"Writing train embedding cache to {train_cache_path}")
         write_embedding_cache(
             raw_model,
             train_raw_ds,
             train_cache_path,
             perch_mapper,
-            source_row_indices=cache_train_rows["source_row_index"].to_numpy(dtype="int32"),
         )
 
         if cfg["validation_num_crops"] == 1:
@@ -175,15 +176,12 @@ def make_datasets(cfg: dict, train_rows, val_rows, labels: list[str], taxonomy, 
 
     train_cache = load_embedding_cache(train_cache_path)
     val_cache = load_embedding_cache(val_cache_path)
-    if "source_row_indices" not in train_cache:
-        raise ValueError("Training embedding cache does not include source_row_indices. Regenerate the cache.")
-    if len(cache_train_rows) != len(train_cache["targets"]):
+    if len(expanded_train_rows) != len(train_cache["targets"]):
         raise ValueError(
             "Embedding cache size does not match training rows. "
-            "Regenerate the cache after changing embedding_cache_focal_crops_per_recording or split settings."
+            "Regenerate the cache after changing focal_train_crops_per_recording or split settings."
         )
-    source_rows = train_rows.reset_index(drop=True)
-    sample_weights = row_sampling_weights(cfg, source_rows, labels, taxonomy, perch_mapping)
+    sample_weights = row_sampling_weights(cfg, expanded_train_rows, labels, taxonomy, perch_mapping)
     if cfg["sampling"] == "weighted":
         print_sampling_summary(sample_weights)
     train_ds = make_embedding_dataset(
@@ -202,7 +200,7 @@ def make_datasets(cfg: dict, train_rows, val_rows, labels: list[str], taxonomy, 
     print(f"training examples: {len(train_cache['targets'])}")
     print(f"validation examples: {len(val_cache['targets'])}")
     print()
-    return train_ds, val_ds, val_row_indices, cache_train_rows
+    return train_ds, val_ds, val_row_indices, expanded_train_rows
 
 
 def best_epoch_from_history(history, phase: str) -> tuple[str, float] | None:
@@ -304,6 +302,7 @@ def print_experiment_summary(
     print(f"weighted_sampling_taxa_multiplier: {cfg['weighted_sampling_taxa_multiplier']}")
     print(f"weighted_sampling_max_weight: {cfg['weighted_sampling_max_weight']}")
     print(f"augmentation: {cfg['augmentation']}")
+    print(f"focal_train_crops_per_recording: {cfg['focal_train_crops_per_recording']}")
     print(f"head_lr: {cfg['head_lr']}")
     print(f"dropout: {cfg['dropout']}")
     print(f"weighted_bce_max_pos_weight: {cfg['weighted_bce_max_pos_weight']}")
@@ -317,7 +316,6 @@ def print_experiment_summary(
     print(f"perch_blend_alpha: {cfg['perch_blend_alpha']}")
     print(f"embedding_cache_enabled: {cfg['embedding_cache_enabled']}")
     print(f"write_embedding_cache: {cfg['write_embedding_cache']}")
-    print(f"embedding_cache_focal_crops_per_recording: {cfg['embedding_cache_focal_crops_per_recording']}")
     print(f"train_embedding_cache_path: {cfg['train_embedding_cache_path']}")
     print(f"val_embedding_cache_path: {cfg['val_embedding_cache_path']}")
     print(f"train_enabled: {cfg['train_enabled']}")
