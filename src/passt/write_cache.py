@@ -11,7 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config import load_config
-from src.data import attach_targets, build_label_space, load_tables, make_mixed_split
+from src.data import attach_targets, build_label_space, load_tables, make_split_from_plan
 from src.passt.cache import write_passt_cache
 
 
@@ -59,12 +59,12 @@ def main() -> None:
     cfg = load_config(PROJECT_ROOT / "config.yaml")
     train_csv, soundscape_csv, _, sample_submission = load_tables(cfg["data_root"])
     label_space = build_label_space(sample_submission)
-    train_rows, val_rows = make_mixed_split(
+    train_rows, val_rows, split_info = make_split_from_plan(
         train_csv,
         soundscape_csv,
         cfg["data_root"],
-        cfg["soundscape_val_fraction"],
-        cfg["seed"],
+        label_space,
+        cfg,
     )
     train_rows = attach_targets(train_rows, label_space)
     val_rows = attach_targets(val_rows, label_space)
@@ -72,6 +72,16 @@ def main() -> None:
     train_cache_rows = expand_focal_rows(train_rows, cfg["passt_cache_focal_crops_per_recording"])
     val_cache_rows = make_passt_val_rows(val_rows, validation_crop_offsets(cfg))
     input_samples = int(32000 * cfg["passt_input_seconds"])
+
+    print(
+        "Split: "
+        f"eval_split={split_info.eval_split}, "
+        f"fold={'n/a' if split_info.fold is None else split_info.fold}, "
+        f"train_soundscape_files={split_info.train_soundscape_files}, "
+        f"val_soundscape_files={split_info.val_soundscape_files}"
+    )
+    print(f"Split plan: {split_info.plan_path}")
+    print()
 
     print(f"Writing PaSST train embedding cache to {cfg['passt_train_cache_path']}")
     write_passt_cache(

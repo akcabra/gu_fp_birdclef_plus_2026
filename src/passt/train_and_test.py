@@ -20,7 +20,15 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.audio import load_clip_np
 from src.config import load_config
-from src.data import attach_targets, build_label_space, load_tables, make_mixed_split, positive_class_weights, save_split
+from src.data import (
+    attach_targets,
+    build_label_space,
+    load_tables,
+    make_split_from_plan,
+    positive_class_weights,
+    save_split,
+    save_split_info,
+)
 from src.metrics import challenge_score_from_arrays, per_class_auc, sigmoid
 from src.passt.cache import load_passt_cache, write_passt_cache
 from src.passt.progress import print_progress
@@ -741,7 +749,15 @@ def run_online_training(
     if cfg["passt_val_predictions_path"]:
         predictions_path = Path(cfg["passt_val_predictions_path"])
         predictions_path.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(predictions_path, targets=y_true, scores=scores)
+        np.savez_compressed(
+            predictions_path,
+            targets=y_true,
+            scores=scores,
+            source_ids=val_rows["source_id"].astype(str).to_numpy(),
+            split_eval=np.asarray(cfg["soundscape_eval_split"]),
+            split_fold=np.asarray(int(cfg["soundscape_fold"]) if cfg["soundscape_eval_split"] == "cv" else -1),
+            split_plan_path=np.asarray(cfg["soundscape_split_plan_path"]),
+        )
         print_progress(f"Saved PaSST validation predictions to {predictions_path}")
 
     soundscape_train_rows = train_rows[train_rows["source"] == "soundscape"]
@@ -783,17 +799,28 @@ def main():
 
     train_csv, soundscape_csv, taxonomy, sample_submission = load_tables(cfg["data_root"])
     label_space = build_label_space(sample_submission)
-    train_rows, val_rows = make_mixed_split(
+    train_rows, val_rows, split_info = make_split_from_plan(
         train_csv,
         soundscape_csv,
         cfg["data_root"],
-        cfg["soundscape_val_fraction"],
-        cfg["seed"],
+        label_space,
+        cfg,
     )
     train_rows = attach_targets(train_rows, label_space)
     val_rows = attach_targets(val_rows, label_space)
     print_data_summary(train_rows, val_rows)
+    print(
+        "Split: "
+        f"eval_split={split_info.eval_split}, "
+        f"fold={'n/a' if split_info.fold is None else split_info.fold}, "
+        f"train_soundscape_files={split_info.train_soundscape_files}, "
+        f"val_soundscape_files={split_info.val_soundscape_files}",
+        flush=True,
+    )
+    print(f"Split plan: {split_info.plan_path}", flush=True)
+    print(flush=True)
     save_split(train_rows, val_rows, PROJECT_ROOT / "data" / "splits")
+    save_split_info(split_info, PROJECT_ROOT / "data" / "splits")
 
     perch_mapping = pd.read_csv(cfg["perch_label_mapping_path"])
     sample_weights = row_sampling_weights(cfg, train_rows.reset_index(drop=True), label_space.labels, taxonomy, perch_mapping)
@@ -952,7 +979,15 @@ def main():
     if cfg["passt_val_predictions_path"]:
         predictions_path = Path(cfg["passt_val_predictions_path"])
         predictions_path.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(predictions_path, targets=y_true, scores=scores)
+        np.savez_compressed(
+            predictions_path,
+            targets=y_true,
+            scores=scores,
+            source_ids=val_rows["source_id"].astype(str).to_numpy(),
+            split_eval=np.asarray(split_info.eval_split),
+            split_fold=np.asarray(-1 if split_info.fold is None else split_info.fold),
+            split_plan_path=np.asarray(split_info.plan_path),
+        )
         print_progress(f"Saved PaSST validation predictions to {predictions_path}")
 
     soundscape_train_rows = train_rows[train_rows["source"] == "soundscape"]

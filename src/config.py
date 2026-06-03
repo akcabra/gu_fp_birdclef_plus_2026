@@ -27,6 +27,7 @@ def load_config(path: str | Path = "config.yaml") -> dict[str, Any]:
         if key in cfg:
             cfg[key] = str(_resolve_project_path(cfg[key]))
     for key in [
+        "soundscape_split_plan_path",
         "passt_train_cache_path",
         "passt_val_cache_path",
         "passt_load_model_weights_path",

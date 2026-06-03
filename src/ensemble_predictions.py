@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config import load_config
-from src.data import attach_targets, build_label_space, load_tables, make_mixed_split
+from src.data import attach_targets, build_label_space, load_tables, make_split_from_plan
 from src.evaluation import print_validation_group_summary, validation_group_summary
 from src.metrics import challenge_score_from_arrays
 
@@ -24,9 +24,39 @@ def format_duration(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
-def load_prediction_file(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
+def load_prediction_file(path: str | Path) -> dict[str, np.ndarray]:
     data = np.load(path)
-    return data["targets"].astype(np.float32), data["scores"].astype(np.float32)
+    result = {
+        "targets": data["targets"].astype(np.float32),
+        "scores": data["scores"].astype(np.float32),
+    }
+    for key in ["source_ids", "split_eval", "split_fold", "split_plan_path"]:
+        if key in data:
+            result[key] = data[key]
+    return result
+
+
+def validate_prediction_metadata(perch_data: dict[str, np.ndarray], passt_data: dict[str, np.ndarray], val_rows: pd.DataFrame) -> None:
+    expected_source_ids = val_rows["source_id"].astype(str).to_numpy()
+    for name, pred_data in [("Perch", perch_data), ("PaSST", passt_data)]:
+        if len(pred_data["targets"]) != len(expected_source_ids):
+            raise ValueError(
+                f"{name} prediction file has {len(pred_data['targets'])} rows, but the configured validation split "
+                f"has {len(expected_source_ids)} rows. Regenerate predictions with the current split settings."
+            )
+        if "source_ids" not in pred_data:
+            print(f"WARNING: {name} prediction file has no source_ids metadata; cannot verify split row order.")
+            continue
+        pred_source_ids = pred_data["source_ids"].astype(str)
+        if len(pred_source_ids) != len(expected_source_ids) or not np.array_equal(pred_source_ids, expected_source_ids):
+            raise ValueError(
+                f"{name} prediction file does not match configured validation split/order. "
+                "Regenerate predictions with the current split settings."
+            )
+
+    if "source_ids" in perch_data and "source_ids" in passt_data:
+        if not np.array_equal(perch_data["source_ids"].astype(str), passt_data["source_ids"].astype(str)):
+            raise ValueError("Perch and PaSST prediction files use different validation source_id order")
 
 
 def alpha_grid(cfg: dict) -> np.ndarray:
@@ -137,17 +167,31 @@ def main() -> None:
 
     train_csv, soundscape_csv, taxonomy, sample_submission = load_tables(cfg["data_root"])
     label_space = build_label_space(sample_submission)
-    train_rows, val_rows = make_mixed_split(
+    train_rows, val_rows, split_info = make_split_from_plan(
         train_csv,
         soundscape_csv,
         cfg["data_root"],
-        cfg["soundscape_val_fraction"],
-        cfg["seed"],
+        label_space,
+        cfg,
     )
     train_rows = attach_targets(train_rows, label_space)
+    print(
+        "Split: "
+        f"eval_split={split_info.eval_split}, "
+        f"fold={'n/a' if split_info.fold is None else split_info.fold}, "
+        f"train_soundscape_files={split_info.train_soundscape_files}, "
+        f"val_soundscape_files={split_info.val_soundscape_files}"
+    )
+    print(f"Split plan: {split_info.plan_path}")
+    print()
 
-    perch_targets, perch_scores = load_prediction_file(cfg["perch_val_predictions_path"])
-    passt_targets, passt_scores = load_prediction_file(cfg["passt_val_predictions_path"])
+    perch_data = load_prediction_file(cfg["perch_val_predictions_path"])
+    passt_data = load_prediction_file(cfg["passt_val_predictions_path"])
+    validate_prediction_metadata(perch_data, passt_data, val_rows)
+    perch_targets = perch_data["targets"]
+    perch_scores = perch_data["scores"]
+    passt_targets = passt_data["targets"]
+    passt_scores = passt_data["scores"]
     if perch_scores.shape != passt_scores.shape:
         raise ValueError(f"Prediction shapes differ: Perch {perch_scores.shape}, PaSST {passt_scores.shape}")
     if not np.array_equal(perch_targets, passt_targets):
@@ -217,6 +261,10 @@ def main() -> None:
             "scores": best_scores,
             "perch_alpha": np.asarray(best_alpha),
             "blend_mode": np.asarray(blend_mode),
+            "source_ids": val_rows["source_id"].astype(str).to_numpy(),
+            "split_eval": np.asarray(split_info.eval_split),
+            "split_fold": np.asarray(-1 if split_info.fold is None else split_info.fold),
+            "split_plan_path": np.asarray(split_info.plan_path),
         }
         if classwise_alphas is not None:
             save_arrays["classwise_perch_alpha"] = classwise_alphas

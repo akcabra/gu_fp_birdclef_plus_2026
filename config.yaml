@@ -21,6 +21,18 @@ validation_crop_stride_seconds: 1.0
 validation_crop_aggregation: max # max or top_k_mean
 validation_top_k: 2
 
+# Soundscape split regime:
+# - holdout soundscapes are locked final local validation only.
+# - cv mode trains on focal recordings plus dev soundscapes outside the selected fold,
+#   and validates on the selected dev soundscape fold.
+# - holdout mode trains on focal recordings plus all dev soundscapes and validates
+#   on the locked holdout soundscapes.
+soundscape_split_plan_path: data/splits/soundscape_split_plan.csv
+soundscape_holdout_fraction: 0.2
+soundscape_cv_folds: 3
+soundscape_eval_split: cv # cv or holdout
+soundscape_fold: 0
+
 perch_blend_enabled: false
 perch_blend_alpha: 0.8
 perch_label_mapping_path: data/metadata/birdclef_to_perch_label_mapping.csv
@@ -78,7 +90,6 @@ best_model_weights_path: outputs/checkpoints/perch_best_0306_3_crop_bce.weights.
 save_model_weights_path: outputs/checkpoints/perch_latest_0306_3_crop_bce.weights.h5
 perch_val_predictions_path: outputs/predictions/perch_val_predictions.npz
 
-soundscape_val_fraction: 0.2
 focal_train_weight: 1.0
 soundscape_train_weight: 1.0
 
