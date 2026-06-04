@@ -3,7 +3,7 @@ perch_model_path: models/perch_v2
 perch_cpu_model_path: models/perch_v2_cpu
 
 seed: 42
-experiment_name: perch_baseline
+experiment_name: perch_linear_head
 # experiment_name: perch_bce_0306_3_crop
 sampling: standard # standard or weighted
 weighted_sampling_rare_threshold: 10
@@ -14,7 +14,7 @@ weighted_sampling_taxa_multiplier: 1.5
 weighted_sampling_max_weight: 5.0
 
 augmentation: random_crop # random_crop, energy_biased_crop, center_crop, or none
-focal_train_crops_per_recording: 3
+focal_train_crops_per_recording: 1
 notes: ""
 validation_num_crops: 1
 validation_crop_stride_seconds: 1.0
@@ -42,10 +42,11 @@ perch_blend_enabled: false
 perch_blend_alpha: 0.8
 perch_label_mapping_path: data/metadata/birdclef_to_perch_label_mapping.csv
 
-embedding_cache_enabled: false
+embedding_cache_enabled: true
+embedding_cache_scope: all_data # split or all_data
 write_embedding_cache: false
-train_embedding_cache_path: outputs/embedding_cache/train_embeddings_new.npz
-val_embedding_cache_path: outputs/embedding_cache/val_embeddings_new.npz
+train_embedding_cache_path: outputs/embedding_cache/train_embeddings_base.npz
+val_embedding_cache_path: outputs/embedding_cache/val_embeddings_base.npz
 
 # PaSST is a separate frozen-embedding pipeline
 passt_training_mode: online # cache or online
@@ -89,21 +90,24 @@ ensemble_classwise_alphas_path: outputs/predictions/ensemble_classwise_alphas.cs
 
 train_enabled: train
 load_model_weights_path: "" # "outputs/checkpoints/best_25_2.weights.h5"
-save_best_model: true
+save_best_model: false
 restore_best_model: true
-best_model_weights_path: outputs/checkpoints/perch_baseline.weights.h5
-save_model_weights_path: outputs/checkpoints/perch_baseline.weights.h5
-perch_val_predictions_path: outputs/predictions/perch_val_predictions_baseline.npz
+# best_model_weights_path: outputs/checkpoints/perch_baseline.weights.h5
+# save_model_weights_path: outputs/checkpoints/perch_baseline.weights.h5
+# perch_val_predictions_path: outputs/predictions/perch_val_predictions_baseline.npz
+best_model_weights_path: ""
+save_model_weights_path: ""
+perch_val_predictions_path: ""
 
 focal_train_weight: 1.0
 soundscape_train_weight: 1.0
 
-head_type: mlp
+head_type: linear # mlp or linear
 hidden_dim: 512
 dropout: 0.3
 
 batch_size: 16
-epochs_head: 6
+epochs_head: 1
 head_lr: 0.0003
 loss: bce # bce, weighted_bce, or focal
 weighted_bce_max_pos_weight: 2.0

@@ -47,9 +47,12 @@ def crop_or_pad(
 ) -> np.ndarray:
     if start_seconds is not None and not np.isnan(start_seconds):
         start = int(round(start_seconds * TARGET_SAMPLE_RATE))
-    elif crop_mode == "random" and len(audio) > CLIP_SAMPLES:
-        start = np.random.randint(0, len(audio) - CLIP_SAMPLES + 1)
-    elif crop_mode == "energy_biased" and len(audio) > CLIP_SAMPLES:
+    elif crop_mode == "random":
+        if len(audio) > CLIP_SAMPLES:
+            start = np.random.randint(0, len(audio) - CLIP_SAMPLES + 1)
+        else:
+            start = 0
+    elif crop_mode == "energy_biased":
         start = energy_biased_start(audio)
     elif crop_mode == "center":
         start = max(0, (len(audio) - CLIP_SAMPLES) // 2)

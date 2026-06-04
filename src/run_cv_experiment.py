@@ -58,8 +58,13 @@ def apply_fold_paths(cfg: dict, model: str, experiment_name: str, cache_name: st
     cfg["soundscape_fold"] = fold
 
     if model == "perch":
-        cfg["train_embedding_cache_path"] = f"outputs/embedding_cache/{cache_name}/fold{fold}_train.npz"
-        cfg["val_embedding_cache_path"] = f"outputs/embedding_cache/{cache_name}/fold{fold}_val.npz"
+        if str(cfg.get("embedding_cache_scope", "split")) == "all_data":
+            shared_cache_path = f"outputs/embedding_cache/{cache_name}/cv_all_data.npz"
+            cfg["train_embedding_cache_path"] = shared_cache_path
+            cfg["val_embedding_cache_path"] = shared_cache_path
+        else:
+            cfg["train_embedding_cache_path"] = f"outputs/embedding_cache/{cache_name}/fold{fold}_train.npz"
+            cfg["val_embedding_cache_path"] = f"outputs/embedding_cache/{cache_name}/fold{fold}_val.npz"
         cfg["best_model_weights_path"] = f"outputs/checkpoints/{experiment_name}/fold{fold}_best.weights.h5"
         cfg["save_model_weights_path"] = f"outputs/checkpoints/{experiment_name}/fold{fold}_latest.weights.h5"
         cfg["perch_val_predictions_path"] = f"outputs/predictions/{experiment_name}/fold{fold}_perch_val_predictions.npz"

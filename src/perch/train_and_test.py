@@ -22,7 +22,7 @@ from src.data import (
 )
 from src.metrics import challenge_score_from_arrays, per_class_auc
 from src.perch.blend import PerchScoreBlender
-from src.perch.embedding_cache import load_embedding_cache, make_embedding_dataset, write_embedding_cache
+from src.perch.embedding_cache import load_embedding_cache, make_embedding_dataset, select_embedding_cache_rows, write_embedding_cache
 from src.perch.model import build_embedding_model, build_model
 from src.perch.train import format_duration, predict_dataset_scores, predict_multicrop_dataset, train_head_only
 from src.utils import set_seed
@@ -91,6 +91,15 @@ def expand_focal_rows(rows, crops_per_focal: int):
     return pd.concat(parts, ignore_index=True)
 
 
+def add_cache_keys(rows):
+    rows = rows.reset_index(drop=True).copy()
+    starts = rows["start_seconds"].fillna(-1).astype(float).map(lambda value: f"{value:.3f}")
+    base_keys = rows["source"].astype(str) + "|" + rows["source_id"].astype(str) + "|" + starts
+    occurrence = base_keys.groupby(base_keys).cumcount().astype(str)
+    rows["cache_key"] = base_keys + "|" + occurrence
+    return rows
+
+
 def row_sampling_weights(cfg: dict, rows, labels: list[str], taxonomy, perch_mapping) -> pd.Series:
     weights = pd.Series(1.0, index=rows.index, dtype="float64")
     if cfg["sampling"] != "weighted":
@@ -133,7 +142,8 @@ def print_sampling_summary(weights: pd.Series) -> None:
 
 def make_datasets(cfg: dict, train_rows, val_rows, labels: list[str], taxonomy, perch_mapping):
     offsets = validation_crop_offsets(cfg)
-    expanded_train_rows = expand_focal_rows(train_rows, cfg["focal_train_crops_per_recording"])
+    expanded_train_rows = add_cache_keys(expand_focal_rows(train_rows, cfg["focal_train_crops_per_recording"]))
+    val_rows = add_cache_keys(val_rows)
     if not cfg["embedding_cache_enabled"]:
         sample_weights = row_sampling_weights(cfg, expanded_train_rows, labels, taxonomy, perch_mapping)
         if cfg["sampling"] == "weighted":
@@ -158,39 +168,75 @@ def make_datasets(cfg: dict, train_rows, val_rows, labels: list[str], taxonomy, 
 
     train_cache_path = Path(cfg["train_embedding_cache_path"])
     val_cache_path = Path(cfg["val_embedding_cache_path"])
+    cache_scope = str(cfg.get("embedding_cache_scope", "split"))
+    if cache_scope not in {"split", "all_data"}:
+        raise ValueError("embedding_cache_scope must be 'split' or 'all_data'")
+    if cache_scope == "all_data" and cfg["validation_num_crops"] != 1:
+        raise ValueError("embedding_cache_scope='all_data' currently supports validation_num_crops=1 only")
 
-    if cfg["write_embedding_cache"] or not train_cache_path.exists() or not val_cache_path.exists():
+    if cache_scope == "all_data":
+        cache_exists = train_cache_path.exists()
+    else:
+        cache_exists = train_cache_path.exists() and val_cache_path.exists()
+
+    if cfg["write_embedding_cache"] or not cache_exists:
         raw_model = build_model(cfg)
         perch_mapper = make_perch_mapper(cfg, labels)
 
-        train_raw_ds = make_tf_dataset(
-            expanded_train_rows,
-            batch_size=cfg["batch_size"],
-            training=True,
-            augmentation=cfg["augmentation"],
-        )
-        print(f"Writing train embedding cache to {train_cache_path}")
-        write_embedding_cache(
-            raw_model,
-            train_raw_ds,
-            train_cache_path,
-            perch_mapper,
-        )
-
         if cfg["validation_num_crops"] == 1:
-            val_raw_ds = make_tf_dataset(val_rows, batch_size=cfg["batch_size"], training=False)
+            cache_val_rows = val_rows
             val_row_indices = None
         else:
             val_raw_ds, val_row_indices = make_multicrop_tf_dataset(val_rows, cfg["batch_size"], offsets)
             print("Validation crops")
             print(f"offsets_seconds: {offsets}")
             print()
-        print(f"Writing validation embedding cache to {val_cache_path}")
-        write_embedding_cache(raw_model, val_raw_ds, val_cache_path, perch_mapper, val_row_indices)
+        if cache_scope == "all_data":
+            cache_rows = add_cache_keys(pd.concat([expanded_train_rows, cache_val_rows], ignore_index=True))
+            cache_ds = make_tf_dataset(
+                cache_rows,
+                batch_size=cfg["batch_size"],
+                training=True,
+                augmentation=cfg["augmentation"],
+            )
+            print(f"Writing all-data embedding cache to {train_cache_path}")
+            write_embedding_cache(raw_model, cache_ds, train_cache_path, perch_mapper, cache_keys=cache_rows["cache_key"].to_numpy())
+        else:
+            train_raw_ds = make_tf_dataset(
+                expanded_train_rows,
+                batch_size=cfg["batch_size"],
+                training=True,
+                augmentation=cfg["augmentation"],
+            )
+            print(f"Writing train embedding cache to {train_cache_path}")
+            write_embedding_cache(
+                raw_model,
+                train_raw_ds,
+                train_cache_path,
+                perch_mapper,
+                cache_keys=expanded_train_rows["cache_key"].to_numpy(),
+            )
+
+            if cfg["validation_num_crops"] == 1:
+                val_raw_ds = make_tf_dataset(val_rows, batch_size=cfg["batch_size"], training=False)
+            print(f"Writing validation embedding cache to {val_cache_path}")
+            write_embedding_cache(
+                raw_model,
+                val_raw_ds,
+                val_cache_path,
+                perch_mapper,
+                val_row_indices,
+                cache_keys=val_rows["cache_key"].to_numpy() if cfg["validation_num_crops"] == 1 else None,
+            )
         del raw_model
 
-    train_cache = load_embedding_cache(train_cache_path)
-    val_cache = load_embedding_cache(val_cache_path)
+    if cache_scope == "all_data":
+        all_cache = load_embedding_cache(train_cache_path)
+        train_cache = select_embedding_cache_rows(all_cache, expanded_train_rows["cache_key"].to_numpy())
+        val_cache = select_embedding_cache_rows(all_cache, val_rows["cache_key"].to_numpy())
+    else:
+        train_cache = load_embedding_cache(train_cache_path)
+        val_cache = load_embedding_cache(val_cache_path)
     if len(expanded_train_rows) != len(train_cache["targets"]):
         raise ValueError(
             "Embedding cache size does not match training rows. "
