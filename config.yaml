@@ -36,7 +36,7 @@ soundscape_fold: 0
 # CV runner settings
 cv_model: perch # perch or passt
 cv_folds_to_run: [] # [] means all folds from 0 to soundscape_cv_folds - 1
-cv_cache_name: "" # empty means use experiment_name; set explicitly to share compatible caches
+cv_cache_name: "train_embeddings_base" # empty means use experiment_name; set explicitly to share compatible caches
 
 perch_blend_enabled: false
 perch_blend_alpha: 0.8

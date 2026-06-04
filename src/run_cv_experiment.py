@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from statistics import mean, stdev
 from time import perf_counter
 import argparse
 import csv
@@ -139,6 +140,50 @@ def write_summary(summary_path: Path, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
+def score_values(rows: list[dict], key: str) -> list[float]:
+    values = []
+    for row in rows:
+        value = row.get(key, "")
+        if value != "":
+            values.append(float(value))
+    return values
+
+
+def summarize_scores(rows: list[dict]) -> dict[str, str]:
+    final_scores = score_values(rows, "final_val_challenge_score")
+    best_scores = score_values(rows, "best_val_challenge_score")
+
+    def stats(values: list[float]) -> tuple[str, str, str]:
+        if not values:
+            return "0", "", ""
+        std = stdev(values) if len(values) > 1 else 0.0
+        return str(len(values)), f"{mean(values):.5f}", f"{std:.5f}"
+
+    final_n, final_mean, final_std = stats(final_scores)
+    best_n, best_mean, best_std = stats(best_scores)
+    return {
+        "completed_folds": final_n,
+        "final_val_challenge_score_mean": final_mean,
+        "final_val_challenge_score_std": final_std,
+        "best_val_challenge_score_completed_folds": best_n,
+        "best_val_challenge_score_mean": best_mean,
+        "best_val_challenge_score_std": best_std,
+    }
+
+
+def write_aggregate_summary(path: Path, model: str, experiment_name: str, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    summary = {
+        "model": model,
+        "experiment_name": experiment_name,
+        **summarize_scores(rows),
+    }
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(summary.keys()))
+        writer.writeheader()
+        writer.writerow(summary)
+
+
 def main() -> None:
     args = parse_args()
     base_cfg = load_config(args.config)
@@ -150,6 +195,7 @@ def main() -> None:
     config_dir = PROJECT_ROOT / "outputs" / "cv_configs" / experiment_name
     log_dir = PROJECT_ROOT / "outputs" / "cv_logs" / experiment_name
     summary_path = PROJECT_ROOT / "outputs" / "cv_summaries" / f"{experiment_name}_{model}.csv"
+    aggregate_summary_path = PROJECT_ROOT / "outputs" / "cv_summaries" / f"{experiment_name}_{model}_aggregate.csv"
     rows = []
 
     for fold in folds:
@@ -197,6 +243,7 @@ def main() -> None:
         row.update({key: relative_project_path(value) for key, value in artifact_paths(fold_cfg, model).items()})
         rows.append(row)
         write_summary(summary_path, rows)
+        write_aggregate_summary(aggregate_summary_path, model, experiment_name, rows)
         print(
             f"Fold {fold} finished: return_code={return_code}, "
             f"final_score={final_score or 'n/a'}, best_score={best_score or 'n/a'}"
@@ -204,7 +251,15 @@ def main() -> None:
         if return_code != 0:
             raise SystemExit(return_code)
 
+    aggregate = summarize_scores(rows)
     print(f"Wrote fold summary to {summary_path}")
+    print(f"Wrote aggregate summary to {aggregate_summary_path}")
+    print(
+        "CV final score: "
+        f"{aggregate['final_val_challenge_score_mean'] or 'n/a'} "
+        f"+/- {aggregate['final_val_challenge_score_std'] or 'n/a'} "
+        f"over {aggregate['completed_folds']} fold(s)"
+    )
 
 
 if __name__ == "__main__":
