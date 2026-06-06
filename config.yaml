@@ -3,11 +3,15 @@ perch_model_path: models/perch_v2
 perch_cpu_model_path: models/perch_v2_cpu
 
 seed: 42
-experiment_name: perch_linear_head
-# experiment_name: perch_bce_0306_3_crop
+# experiment_name: perch_weighted_sampling_10_2_2_15_5
+# experiment_name: perch_multi_crop_validation_5_1s_max_long
+# experiment_name: perch_baseline_holdout
+experiment_name: ensemble_global
+# experiment_name: passt_baseline_holdout
+# experiment_name: perch_multi_crop_validation_5max_dropout_070_holdout
 sampling: standard # standard or weighted
 weighted_sampling_rare_threshold: 10
-weighted_sampling_rare_multiplier: 3.0
+weighted_sampling_rare_multiplier: 2.0
 weighted_sampling_unmatched_multiplier: 2.0
 weighted_sampling_taxa: ["Insecta", "Reptilia"]
 weighted_sampling_taxa_multiplier: 1.5
@@ -30,23 +34,25 @@ validation_top_k: 2
 soundscape_split_plan_path: data/splits/soundscape_split_plan.csv
 soundscape_holdout_fraction: 0.2
 soundscape_cv_folds: 3
-soundscape_eval_split: cv # cv or holdout
+soundscape_eval_split: holdout # cv or holdout
 soundscape_fold: 0
 
 # CV runner settings
-cv_model: perch # perch or passt
+cv_model: passt # perch or passt
 cv_folds_to_run: [] # [] means all folds from 0 to soundscape_cv_folds - 1
-cv_cache_name: "train_embeddings_base" # empty means use experiment_name; set explicitly to share compatible caches
+cv_cache_name: ""
 
 perch_blend_enabled: false
 perch_blend_alpha: 0.8
 perch_label_mapping_path: data/metadata/birdclef_to_perch_label_mapping.csv
 
-embedding_cache_enabled: true
+embedding_cache_enabled: false
 embedding_cache_scope: all_data # split or all_data
 write_embedding_cache: false
-train_embedding_cache_path: outputs/embedding_cache/train_embeddings_base.npz
-val_embedding_cache_path: outputs/embedding_cache/val_embeddings_base.npz
+train_embedding_cache_path: outputs/embedding_cache/train_perch_energy_biased_crop.npz
+val_embedding_cache_path: outputs/embedding_cache/val_perch_energy_biased_crop.npz
+# train_embedding_cache_path: outputs/embedding_cache/train_embeddings_base.npz
+# val_embedding_cache_path: outputs/embedding_cache/val_embeddings_base.npz
 
 # PaSST is a separate frozen-embedding pipeline
 passt_training_mode: online # cache or online
@@ -54,8 +60,8 @@ passt_device: cuda
 passt_arch: ""
 passt_clip_seconds: 5.0
 passt_input_seconds: 5.0
-passt_batch_size: 32
-passt_num_workers: 4
+passt_batch_size: 256
+passt_num_workers: 32
 passt_feature_mode: all # all, features, or logits
 passt_train_backbone: true
 passt_unfreeze_last_n_blocks: 2
@@ -75,18 +81,25 @@ passt_train_cache_path: outputs/passt_cache/train_embeddings.npz
 passt_val_cache_path: outputs/passt_cache/val_embeddings.npz
 passt_load_model_weights_path: ""
 passt_save_best_model: true
-passt_best_model_weights_path: outputs/checkpoints/passt_focal_mixup_unfreeze_2_focal.pt
-passt_save_model_weights_path: outputs/checkpoints/passt_focal_mixup_unfreeze_2_focal_latest.pt
-passt_val_predictions_path: outputs/predictions/passt_val_predictions_focal_mixup_unfreeze_1_focal.npz
+passt_best_model_weights_path: outputs/checkpoints/passt_mixup_focal_specaugment_unfrozen_2_holdout_best.pt
+passt_save_model_weights_path: outputs/checkpoints/passt_mixup_focal_specaugment_unfrozen_2_holdout_latest.pt
+passt_val_predictions_path: outputs/predictions/passt_mixup_focal_specaugment_unfrozen_2_holdout_2.npz
+# passt_val_predictions_path: outputs/predictions/passt_unfreeze_1_focal_mixup_specaugment
 
 # Prediction-level validation blending. Generate Perch and PaSST validation
 # prediction npz files, then run: python -m src.ensemble_predictions
 ensemble_val_predictions_path: outputs/predictions/ensemble_val_predictions.npz
-ensemble_blend_mode: classwise # global or classwise
+ensemble_blend_mode: global # global or classwise
 ensemble_alpha_step: 0.05
+# Set to a tuned OOF value, e.g. 0.25, to apply a fixed global alpha
+# without re-tuning on the current validation/holdout split.
+ensemble_fixed_perch_alpha: 0.25
+# Set to a class-wise alpha CSV produced by src.tune_oof_ensemble to apply
+# fixed class-wise alphas without re-tuning on the current validation/holdout split.
+ensemble_fixed_classwise_alphas_path: ""
 ensemble_classwise_shrinkage: 0.5
 ensemble_classwise_min_positives: 3
-ensemble_classwise_alphas_path: outputs/predictions/ensemble_classwise_alphas.csv
+ensemble_classwise_alphas_path: outputs/predictions/ensemble_final_global_holdout_alphas.csv
 
 train_enabled: train
 load_model_weights_path: "" # "outputs/checkpoints/best_25_2.weights.h5"
@@ -95,19 +108,20 @@ restore_best_model: true
 # best_model_weights_path: outputs/checkpoints/perch_baseline.weights.h5
 # save_model_weights_path: outputs/checkpoints/perch_baseline.weights.h5
 # perch_val_predictions_path: outputs/predictions/perch_val_predictions_baseline.npz
-best_model_weights_path: ""
-save_model_weights_path: ""
-perch_val_predictions_path: ""
+best_model_weights_path: "outputs/checkpoints/perch_multi_crop_validation_5max_dropout_070_holdout_best.weights.h5"
+save_model_weights_path: "outputs/checkpoints/perch_multi_crop_validation_5max_dropout_070_holdout_latest.weights.h5"
+perch_val_predictions_path: "outputs/predictions/perch_multi_crop_validation_5max_dropout_070_holdout.npz"
+# perch_val_predictions_path: "outputs/predictions/perch_multi_crop_validation_5max_dropout_070"
 
 focal_train_weight: 1.0
 soundscape_train_weight: 1.0
 
-head_type: linear # mlp or linear
+head_type: mlp # mlp or linear
 hidden_dim: 512
-dropout: 0.3
+dropout: 0.7
 
-batch_size: 16
-epochs_head: 1
+batch_size: 64
+epochs_head: 10
 head_lr: 0.0003
 loss: bce # bce, weighted_bce, or focal
 weighted_bce_max_pos_weight: 2.0

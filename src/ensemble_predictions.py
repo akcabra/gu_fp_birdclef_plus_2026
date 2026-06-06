@@ -25,7 +25,7 @@ def format_duration(seconds: float) -> str:
 
 
 def load_prediction_file(path: str | Path) -> dict[str, np.ndarray]:
-    data = np.load(path)
+    data = np.load(path, allow_pickle=True)
     result = {
         "targets": data["targets"].astype(np.float32),
         "scores": data["scores"].astype(np.float32),
@@ -76,6 +76,44 @@ def alpha_grid(cfg: dict) -> np.ndarray:
 
 def blend_scores(perch_scores: np.ndarray, passt_scores: np.ndarray, perch_alpha: float | np.ndarray) -> np.ndarray:
     return perch_alpha * perch_scores + (1.0 - perch_alpha) * passt_scores
+
+
+def fixed_perch_alpha(cfg: dict) -> float | None:
+    value = cfg.get("ensemble_fixed_perch_alpha")
+    if value is None:
+        return None
+    alpha = float(value)
+    if not 0.0 <= alpha <= 1.0:
+        raise ValueError("ensemble_fixed_perch_alpha must be in [0, 1]")
+    return alpha
+
+
+def fixed_classwise_alpha_path(cfg: dict) -> Path | None:
+    value = cfg.get("ensemble_fixed_classwise_alphas_path")
+    if not value:
+        return None
+    return Path(value)
+
+
+def load_classwise_alphas(path: Path, labels: list[str]) -> np.ndarray:
+    table = pd.read_csv(path)
+    required = {"label", "perch_alpha"}
+    missing = required - set(table.columns)
+    if missing:
+        raise ValueError(f"Class-wise alpha file {path} is missing columns: {sorted(missing)}")
+
+    alpha_by_label = dict(zip(table["label"].astype(str), table["perch_alpha"].astype(float)))
+    missing_labels = [label for label in labels if label not in alpha_by_label]
+    if missing_labels:
+        raise ValueError(
+            f"Class-wise alpha file {path} is missing {len(missing_labels)} labels, "
+            f"including {missing_labels[:5]}"
+        )
+
+    alphas = np.asarray([alpha_by_label[label] for label in labels], dtype=np.float32)
+    if np.any((alphas < 0.0) | (alphas > 1.0)):
+        raise ValueError(f"Class-wise alpha file {path} contains values outside [0, 1]")
+    return alphas
 
 
 def global_alpha_sweep(
@@ -197,27 +235,53 @@ def main() -> None:
     if not np.array_equal(perch_targets, passt_targets):
         raise ValueError("Perch and PaSST prediction files have different validation targets/order")
 
-    grid = alpha_grid(cfg)
-    results, best_alpha, best_score, best_scores = global_alpha_sweep(
-        perch_targets,
-        perch_scores,
-        passt_scores,
-        label_space.labels,
-        grid,
-    )
-    print("Ensemble alpha sweep")
-    print(results.to_string(index=False, formatters={"perch_alpha": "{:.2f}".format, "val_challenge_score": "{:.5f}".format}))
-    print()
-    print(f"best perch_alpha: {best_alpha:.2f}")
-    print(f"best val_challenge_score: {best_score:.5f}")
-
     blend_mode = str(cfg.get("ensemble_blend_mode", "global")).lower()
     classwise_alphas = None
     classwise_table = None
     if blend_mode not in {"global", "classwise"}:
         raise ValueError("ensemble_blend_mode must be 'global' or 'classwise'")
 
-    if blend_mode == "classwise":
+    fixed_alpha = fixed_perch_alpha(cfg)
+    fixed_classwise_path = fixed_classwise_alpha_path(cfg)
+    if fixed_alpha is not None and fixed_classwise_path is not None:
+        raise ValueError("Set only one of ensemble_fixed_perch_alpha or ensemble_fixed_classwise_alphas_path")
+
+    if fixed_alpha is not None:
+        if blend_mode != "global":
+            raise ValueError("ensemble_fixed_perch_alpha can only be used with ensemble_blend_mode='global'")
+        best_alpha = fixed_alpha
+        best_scores = blend_scores(perch_scores, passt_scores, best_alpha)
+        best_score = challenge_score_from_arrays(perch_targets, best_scores, label_space.labels)
+        print("Fixed ensemble alpha")
+        print(f"perch_alpha: {best_alpha:.2f}")
+        print(f"val_challenge_score: {best_score:.5f}")
+    elif fixed_classwise_path is not None:
+        if blend_mode != "classwise":
+            raise ValueError("ensemble_fixed_classwise_alphas_path can only be used with ensemble_blend_mode='classwise'")
+        classwise_alphas = load_classwise_alphas(fixed_classwise_path, label_space.labels)
+        best_alpha = float(np.mean(classwise_alphas))
+        best_scores = blend_scores(perch_scores, passt_scores, classwise_alphas[np.newaxis, :])
+        best_score = challenge_score_from_arrays(perch_targets, best_scores, label_space.labels)
+        print("Fixed class-wise ensemble alphas")
+        print(f"alpha_path: {fixed_classwise_path}")
+        print(f"mean_perch_alpha: {best_alpha:.3f}")
+        print(f"val_challenge_score: {best_score:.5f}")
+    else:
+        grid = alpha_grid(cfg)
+        results, best_alpha, best_score, best_scores = global_alpha_sweep(
+            perch_targets,
+            perch_scores,
+            passt_scores,
+            label_space.labels,
+            grid,
+        )
+        print("Ensemble alpha sweep")
+        print(results.to_string(index=False, formatters={"perch_alpha": "{:.2f}".format, "val_challenge_score": "{:.5f}".format}))
+        print()
+        print(f"best perch_alpha: {best_alpha:.2f}")
+        print(f"best val_challenge_score: {best_score:.5f}")
+
+    if blend_mode == "classwise" and fixed_classwise_path is None:
         shrinkage = float(cfg.get("ensemble_classwise_shrinkage", 0.5))
         min_positives = int(cfg.get("ensemble_classwise_min_positives", 3))
         classwise_alphas, classwise_table = tune_classwise_alphas(
