@@ -96,6 +96,7 @@ def make_tf_dataset(
     sample_weights: np.ndarray | None = None,
     seed: int = 42,
     augmentation: str = "random_crop",
+    shuffle: bool = True,
 ):
     import tensorflow as tf
 
@@ -119,7 +120,7 @@ def make_tf_dataset(
     else:
         ds = tf.data.Dataset.from_tensor_slices((paths, sources, starts, targets))
 
-    if training and sample_weights is None:
+    if training and sample_weights is None and shuffle:
         ds = ds.shuffle(min(len(rows), 4096), reshuffle_each_iteration=True)
 
     def _load(path, source, start, target):

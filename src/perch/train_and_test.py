@@ -198,6 +198,7 @@ def make_datasets(cfg: dict, train_rows, val_rows, labels: list[str], taxonomy, 
                 batch_size=cfg["batch_size"],
                 training=True,
                 augmentation=cfg["augmentation"],
+                shuffle=False,
             )
             print(f"Writing all-data embedding cache to {train_cache_path}")
             write_embedding_cache(raw_model, cache_ds, train_cache_path, perch_mapper, cache_keys=cache_rows["cache_key"].to_numpy())
@@ -207,6 +208,7 @@ def make_datasets(cfg: dict, train_rows, val_rows, labels: list[str], taxonomy, 
                 batch_size=cfg["batch_size"],
                 training=True,
                 augmentation=cfg["augmentation"],
+                shuffle=False,
             )
             print(f"Writing train embedding cache to {train_cache_path}")
             write_embedding_cache(
